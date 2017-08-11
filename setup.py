@@ -26,7 +26,8 @@ setuptools.setup(
     "microscope",
     "microscope.cameras",
     "microscope.lasers",
-    "microscope.testsuite",
+    "microscope.mirror",
+    "microscope.testsuite"
   ],
 
   install_requires = [
