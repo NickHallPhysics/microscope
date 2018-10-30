@@ -83,7 +83,7 @@ class MicroscopeWindowsService(win32serviceutil.ServiceFramework):
 
 def handle_command_line():
     if len(sys.argv) == 1:
-        print("\nNo action specified.\n", file=sys.stderr)
+        print("\nNo action specified.\n", sys.stderr)
         sys.exit(1)
     if sys.argv[1].lower() in ['install', 'update']:
         if len(sys.argv) == 2:
