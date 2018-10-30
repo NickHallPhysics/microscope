@@ -19,10 +19,11 @@
 ## You should have received a copy of the GNU General Public License
 ## along with Microscope.  If not, see <http://www.gnu.org/licenses/>.
 
-import time
+## We do this because this module has the same name as the ximea package.
+## Will no longer be needed when we only run in python 3.0
+from __future__ import absolute_import
 
 import Pyro4
-import numpy as np
 
 from microscope import devices
 from microscope.devices import keep_acquiring
