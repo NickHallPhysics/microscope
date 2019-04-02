@@ -553,6 +553,7 @@ class DataDevice(Device):
         """Put data and timestamp into dispatch buffer with target dispatch client."""
         self._dispatch_buffer.put((self._client, data, timestamp))
 
+    @Pyro4.expose
     def set_client(self, new_client):
         """Set up a connection to our client.
 
@@ -566,7 +567,7 @@ class DataDevice(Device):
         and remove only that caller from the client stack.
         """
         if new_client is not None:
-            if isinstance(new_client, (string_types, Pyro4.core.URI)):
+            if isinstance(new_client, string_types):
                 self._client = Pyro4.Proxy(new_client)
             else:
                 self._client = new_client
@@ -589,6 +590,7 @@ class DataDevice(Device):
         """A passthrough for compatibility."""
         self.set_client(client_uri)
 
+    @Pyro4.expose
     def grab_next_data(self, soft_trigger=True):
             """Returns results from next trigger via a direct call.
 
@@ -608,6 +610,7 @@ class DataDevice(Device):
             return self._new_data
 
     # noinspection PyPep8Naming
+    @Pyro4.expose
     def receiveData(self, data, timestamp):
         """Unblocks grab_next_frame so it can return."""
         with self._new_data_condition:
