@@ -24,6 +24,7 @@
 from __future__ import absolute_import
 
 import Pyro4
+import numpy as np
 
 from microscope import devices
 from microscope.devices import keep_acquiring
@@ -55,11 +56,12 @@ TRIGGER_MODES = {
 @Pyro4.expose
 @Pyro4.behavior('single')
 class XimeaCamera(devices.CameraDevice):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, dev_id = 0, *args, **kwargs):
         super(XimeaCamera, self).__init__(**kwargs)
         self._acquiring = False
         self._exposure_time = 0.1
         self._triggered = False
+        self.dev_id = dev_id
 
     def _fetch_data(self):
         if self._acquiring and self._triggered:
@@ -80,7 +82,7 @@ class XimeaCamera(devices.CameraDevice):
         Open the connection, connect properties and populate settings dict.
         """
         try:
-            self.handle = xiapi.Camera()
+            self.handle = xiapi.Camera(self.dev_id)
             self.handle.open_device()
         except:
             raise Exception("Problem opening camera.")
@@ -122,14 +124,16 @@ class XimeaCamera(devices.CameraDevice):
 
 
     def get_trigger_type(self):
-        trig=self.handle.get_trigger_source()
+        trig = self.handle.get_trigger_source()
+        self._logger.info("Trigger type: %s" % trig)
+        self._logger.info("Returning trigger type: %s" % devices.TRIGGER_SOFT)
         return devices.TRIGGER_SOFT
 
     def set_trigger_type(self, trigger):
         if (trigger == devices.TRIGGER_SOFT):
-            self.handle.set_triger_source(XI_TG_SOURCE['Xi_TRG_SOFTWARE'])
+            self.handle.set_triger_source(XI_TG_SOURCE[b'Xi_TRG_SOFTWARE'])
         elif (trigger == devices.TRIGGER_BEFORE):
-            self.handle.set_triger_source(XI_TG_SOURCE['Xi_TRG_EDGE_RISING'])
+            self.handle.set_triger_source(XI_TG_SOURCE[b'Xi_TRG_EDGE_RISING'])
             #define digial input mode of trigger
             self.handle.set_gpi_selector(1)
             self.handle.set_gpi_mode(XI_GPI_TRIGGER)
