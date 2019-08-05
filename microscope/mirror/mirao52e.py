@@ -70,7 +70,7 @@ class Mirao52e(microscope.devices.DeformableMirror):
         them from the [0 1] range we expect in our interface.
         """
         patterns = (patterns * 2) -1
-        return pattern
+        return patterns
     ##  
  
     def apply_pattern(self, pattern):
