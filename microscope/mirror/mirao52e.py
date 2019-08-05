@@ -62,8 +62,20 @@ class Mirao52e(microscope.devices.DeformableMirror):
     def n_actuators(self):
         return mro.NB_COMMAND_VALUES
 
+    ## tk added
+    @staticmethod
+    def _normalize_patterns(patterns):
+        """
+        mirao52e SDK expects values in the [-1 1] range, so we normalize
+        them from the [0 1] range we expect in our interface.
+        """
+        patterns = (patterns * 2) -1
+        return pattern
+    ##  
+ 
     def apply_pattern(self, pattern):
         self._validate_patterns(pattern)
+        pattern = self._normalize_patterns(pattern)  ##tk added
         command = pattern.ctypes.data_as(mro.Command)
         if not mro.applyCommand(command, mro.FALSE, self._status):
             self._raise_status(mro.applyCommand)
