@@ -21,7 +21,6 @@
 
 import ctypes
 
-
 ## Vendor only supports Windows
 SDK = ctypes.WinDLL('mirao52e')
 
@@ -32,7 +31,8 @@ NB_COMMAND_VALUES = 52
 
 ## Error code defines
 OK = 0
-
+FALSE = False
+TRUE = True
 
 Boolean = ctypes.c_char
 Command = ctypes.POINTER(ctypes.c_double)
