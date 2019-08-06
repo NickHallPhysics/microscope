@@ -38,6 +38,7 @@ applies.
 """
 
 import ctypes
+import typing
 
 import microscope.devices
 import microscope._wrappers.mirao52e as mro
@@ -45,7 +46,7 @@ import microscope._wrappers.mirao52e as mro
 
 class Mirao52e(microscope.devices.DeformableMirror):
     def __init__(self, **kwargs):
-        super().__init__(*kwargs)
+        super().__init__(**kwargs)
         ## Status is not the return code of the function calls.
         ## Status is where we can find the error code, if a function
         ## call returns false.  It will be an argument in all function
