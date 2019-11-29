@@ -305,11 +305,23 @@ class Device(metaclass=abc.ABCMeta):
 
     def get_all_settings(self):
         """Return ordered settings as a list of dicts."""
-        try:
-            return {k: v.get() for k, v in self.settings.items()}
-        except Exception as err:
-            _logger.error("in get_all_settings:", exc_info=err)
-            raise
+        # Fetching some settings may fail depending on device state.
+        # Fetch those that are available, and report failures in __errors__.
+        # TODO - cockpit may need changes to prevent exceptions due to
+        # presence of unexpected settings entry, __errors__.
+        def catch(f, errors):
+            try:
+                return f()
+            except Exception as err:
+                _logger.error("getting %s: %s" % (f.__self__.name, err))
+                errors.append(f.__self__.name)
+                return None
+
+        errors = []
+        settings = {k: catch(v.get, errors) for k, v in self.settings.items()}
+        if errors:
+            settings.update({"__errors__": errors})
+        return settings
 
     def set_setting(self, name, value):
         """Set a setting."""
