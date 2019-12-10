@@ -2,6 +2,10 @@
 # -*- coding: utf-8 -*-
 
 ## Copyright (C) 2019 David Miguel Susano Pinto <david.pinto@bioch.ox.ac.uk>
+<<<<<<< HEAD
+=======
+## Copyright (C) 2019 久保俊貴 <kubo@ap.eng.osaka-u.ac.jp>
+>>>>>>> 3cd6bd56381cebefef6aea6eebc018c9d6585835
 ##
 ## Microscope is free software: you can redistribute it and/or modify
 ## it under the terms of the GNU General Public License as published by

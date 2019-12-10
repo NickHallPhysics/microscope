@@ -23,8 +23,6 @@ import ctypes
 import os
 import warnings
 
-import Pyro4
-
 from microscope.devices import DeformableMirror
 
 import microscope._wrappers.BMC as BMC
@@ -32,7 +30,7 @@ import microscope._wrappers.BMC as BMC
 
 class BMCDeformableMirror(DeformableMirror):
     def __init__(self, serial_number, **kwargs):
-        super(BMCDeformableMirror, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self._dm = BMC.DM()
 
         if __debug__:
@@ -57,4 +55,4 @@ class BMCDeformableMirror(DeformableMirror):
         status = BMC.Close(self._dm)
         if status:
             warnings.warn(BMC.ErrorString(status), RuntimeWarning)
-            super(BMCDeformableMirror, self).__del__()
+            super().__del__()

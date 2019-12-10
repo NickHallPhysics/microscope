@@ -22,10 +22,10 @@ This class provides a wrapper for PYME's SDK3 interface that allows
 a camera and all its settings to be exposed over Pyro.
 """
 
+import logging
 import queue
 import time
 
-import Pyro4
 import numpy as np
 
 from microscope import devices
@@ -33,6 +33,9 @@ from microscope.devices import keep_acquiring
 from microscope.devices import ROI
 
 from .SDK3Cam import *
+
+
+_logger = logging.getLogger(__name__)
 
 
 # SDK data pointer type
@@ -176,12 +179,12 @@ INVALIDATES_BUFFERS = ['_simple_pre_amp_gain_control', '_pre_amp_gain_control',
                        '_aoi_binning', '_aoi_left', '_aoi_top',
                        '_aoi_width', '_aoi_height', ]
 
-@Pyro4.behavior('single')
+
 class AndorSDK3(devices.FloatingDeviceMixin,
                 devices.CameraDevice):
     SDK_INITIALIZED = False
     def __init__(self, index=0, **kwargs):
-        super(AndorSDK3, self).__init__(index=index, **kwargs)
+        super().__init__(index=index, **kwargs)
         if not AndorSDK3.SDK_INITIALIZED:
             SDK3.InitialiseLibrary()
         self.handle = None
@@ -323,7 +326,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
 
     def _purge_buffers(self):
         """Purge buffers on both camera and PC."""
-        self._logger.debug("Purging buffers.")
+        _logger.debug("Purging buffers.")
         self._buffers_valid = False
         if self._acquiring:
             raise Exception ('Can not modify buffers while camera acquiring.')
@@ -341,7 +344,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
         if num is None:
             num = self.num_buffers
         self._purge_buffers()
-        self._logger.debug("Creating %d buffers." % num)
+        _logger.debug("Creating %d buffers." % num)
         self._img_stride = self._aoi_stride.get_value()
         self._img_width = self._aoi_width.get_value()
         self._img_height = self._aoi_height.get_value()
@@ -373,7 +376,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
             ptr, length = SDK3.WaitBuffer(self.handle, timeout)
         except SDK3.TimeoutError as e:
             if debug:
-                self._logger.debug(e)
+                _logger.debug(e)
             return None
         except Exception:
             raise
@@ -396,7 +399,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
 
     def abort(self):
         """Abort acquisition."""
-        self._logger.debug('Disabling acquisition.')
+        _logger.debug('Disabling acquisition.')
         if self._acquiring:
             self._acquisition_stop()
 
@@ -448,7 +451,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
             self._trigger_mode.set_string('Software')
             self._cycle_mode.set_string('Continuous')
         else:
-            self._logger.warn("No hardware found - using SIMCAM")
+            _logger.warn("No hardware found - using SIMCAM")
 
 
         def callback(*args):
@@ -486,7 +489,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
         self._buffers_valid = False
 
     def _on_enable(self):
-        self._logger.debug("Preparing for acquisition.")
+        _logger.debug("Preparing for acquisition.")
         if self._acquiring:
             self._acquisition_stop()
         self._create_buffers()
@@ -494,7 +497,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
             self._acquisition_start()
         except Exception as e:
             raise Exception(str(e))
-        self._logger.debug("Acquisition enabled: %s." % self._acquiring)
+        _logger.debug("Acquisition enabled: %s." % self._acquiring)
         return True
 
     @keep_acquiring
@@ -504,7 +507,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
                       value))[1]
         self._exposure_time.set_value(bounded_value)
         self._frame_rate.set_value(self._frame_rate.max())
-        self._logger.debug("Set exposure time to %f, resulting framerate %f."
+        _logger.debug("Set exposure time to %f, resulting framerate %f."
                           % (bounded_value, self._frame_rate.get_value()))
 
     def get_exposure_time(self):
