@@ -4,12 +4,18 @@ python-microscope releases.
 Version 0.4.0 (upcoming)
 ------------------------
 
+* Selected most important, backwards incompatible, changes:
+
+  * The `Setting` class is now private.  The only supported method to
+    add settings to a `Device` is via its `add_setting` method.
+
 * New devices supported:
 
-  * Coherent Obis laser.
+  * Coherent Obis laser
   * Lumencor Spectra III light engine
   * Prior ProScan III controller
   * Prior filter wheels
+  * Toptica iBeam laser
 
 * Changes to device ABCs:
 
@@ -22,6 +28,13 @@ Version 0.4.0 (upcoming)
 
     * Concrete classes must implement the `n_actuators` public
       property instead of the private _n_actuators`.
+
+* Device specific changes:
+
+  * Ximea Camera:
+
+    * Support for the ximea cameras was completely rewritten to
+      support hardware triggers, as well as fix multiple minor issues.
 
 * The device server and clients no longer force pickle protocol
   version 2.  If the client and server are running different Python
