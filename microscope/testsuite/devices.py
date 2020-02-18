@@ -244,13 +244,12 @@ class TestCamera(devices.CameraDevice):
             light = int(255 - 128 * np.random.rand())
             width = self._roi.width // self._binning.h
             height = self._roi.height // self._binning.v
-            size = (width, height)
             image = self._image_generator.get_image(width, height, dark, light, index=self._sent)
             self._sent += 1
             return image
 
     def abort(self):
-        _logger.info("Disabling acquisition; %d images sent." % self._sent)
+        _logger.info("Disabling acquisition; %d images sent.", self._sent)
         if self._acquiring:
             self._acquiring = False
 
@@ -298,8 +297,8 @@ class TestCamera(devices.CameraDevice):
 
     @must_be_initialized
     def soft_trigger(self):
-        _logger.info('Trigger received; self._acquiring is %s.'
-                     % self._acquiring)
+        _logger.info('Trigger received; self._acquiring is %s.',
+                     self._acquiring)
         if self._acquiring:
             self._triggered += 1
 
@@ -331,7 +330,7 @@ class TestFilterWheel(FilterWheelBase):
 
     def set_position(self, position):
         time.sleep(1)
-        _logger.info("Setting position to %s" % position)
+        _logger.info("Setting position to %s", position)
         self._position = position
 
     def initialize(self):
@@ -369,7 +368,7 @@ class TestLaser(devices.LaserDevice):
         return self._emission
 
     def _set_power_mw(self, level):
-        _logger.info("Power set to %s." % level)
+        _logger.info("Power set to %s.", level)
         self._power = level
 
     def get_max_power_mw(self):
@@ -389,6 +388,10 @@ class TestDeformableMirror(devices.DeformableMirror):
     def __init__(self, n_actuators, **kwargs):
         super().__init__(**kwargs)
         self._n_actuators = n_actuators
+
+    @property
+    def n_actuators(self) -> int:
+        return self._n_actuators
 
     def apply_pattern(self, pattern):
         self._validate_patterns(pattern)
@@ -412,7 +415,7 @@ class DummySLM(devices.Device):
         pass
 
     def set_sim_diffraction_angle(self, theta):
-        _logger.info('set_sim_diffraction_angle %f' % theta)
+        _logger.info('set_sim_diffraction_angle %f', theta)
         self.sim_diffraction_angle = theta
 
     def get_sim_diffraction_angle(self):
@@ -458,15 +461,15 @@ class DummyDSP(devices.Device):
         _logger.info('Abort')
 
     def WriteDigital(self, value):
-        _logger.info('WriteDigital: %s' % "{0:b}".format(value))
+        _logger.info('WriteDigital: %s', bin(value))
         self._digi = value
 
     def MoveAbsolute(self, aline, pos):
-        _logger.info('MoveAbsoluteADU: line %d, value %d' % (aline, pos))
+        _logger.info('MoveAbsoluteADU: line %d, value %d', aline, pos)
         self._ana[aline] = pos
 
     def arcl(self, mask, pairs):
-        _logger.info('arcl: %s, %s' % (mask, pairs))
+        _logger.info('arcl: %s, %s', mask, pairs)
 
     def profileSet(self, pstr, digitals, *analogs):
         _logger.info('profileSet ...')
@@ -486,12 +489,12 @@ class DummyDSP(devices.Device):
         _logger.info(kwargs)
 
     def ReadPosition(self, aline):
-        _logger.info('ReadPosition   : line %d, value %d'
-                     % (aline, self._ana[aline]))
+        _logger.info('ReadPosition   : line %d, value %d',
+                     aline, self._ana[aline])
         return self._ana[aline]
 
     def ReadDigital(self):
-        _logger.info('ReadDigital: %s' % "{0:b}".format(self._digi))
+        _logger.info('ReadDigital: %s', bin(self._digi))
         return self._digi
 
     def PrepareActions(self, actions, numReps=1):

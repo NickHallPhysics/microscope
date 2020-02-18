@@ -31,10 +31,9 @@ ctypes objects.
   * get_id returns an empty string, not the device serial number."""
 
 import ctypes
-from ctypes import addressof, byref, POINTER
+from ctypes import byref, POINTER
 from enum import Enum, IntEnum
 from microscope import devices
-from microscope.devices import Setting
 import datetime, time
 
 _max_version_length = 20
@@ -73,7 +72,7 @@ class _CommsInfo(ctypes.Structure):
             return self.info
         else:
             offset = getattr(_CommsInfo, 'info').offset
-            return _USBCommsInfo.from_buffer(self, getattr(_CommsInfo, 'info').offset)
+            return _USBCommsInfo.from_buffer(self, offset)
 
 
 class _SerialCommsInfo(ctypes.Structure):
@@ -1113,7 +1112,6 @@ class _LinkamBase(devices.FloatingDeviceMixin, devices.Device):
         else:
             svt = _StageValueType(svt)
         vtype = _StageValueTypeToVariant.get(svt, "vFloat32")
-        v = _Variant(**{vtype: val})
         return self._process_msg(Msg.SetValue,
                                     _StageValueType(svt).value,
                                     _Variant(**{vtype: val})).vBoolean
@@ -1230,7 +1228,7 @@ class _LinkamMDSMixin():
                 # way to tell if they've been written to, so write them once here.
                 self.set_value(svt, self.get_value(svt))
                 # Also add a Setting that clients can use to modify the velocity.
-                self.add_setting(name, float,
+                self.add_setting(name, 'float',
                                  lambda svt=svt: self.get_value(svt),
                                  lambda val, svt=svt, s=self: self.set_value(svt, val),
                                  lambda svt=svt: self.get_value_limits(svt))
@@ -1321,7 +1319,7 @@ class LinkamCMS(_LinkamMDSMixin, _LinkamBase):
         self._refills = dict({k:self.RefillTracker() for k in self._refill_map})
         # Condensor LED level when on
         self._condensor_level = 100
-        self.add_setting("condensor", float,
+        self.add_setting("condensor", 'float',
                          self.get_condensor_level,
                          self.set_condensor_level,
                          (0, 100))

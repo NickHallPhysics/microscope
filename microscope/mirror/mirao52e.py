@@ -59,7 +59,6 @@ class Mirao52e(microscope.devices.DeformableMirror):
         ## super class needs this, but maybe it should be calling the
         ## property directly?
         self._n_actuators = mro.NB_COMMAND_VALUES
-
     @property
     def n_actuators(self):
         return mro.NB_COMMAND_VALUES

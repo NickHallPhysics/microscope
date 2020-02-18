@@ -1,21 +1,21 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-## Copyright (C) 2017 David Pinto <david.pinto@bioch.ox.ac.uk>
-## Copyright (C) 2016 Mick Phillips <mick.phillips@gmail.com>
-##
-## Microscope is free software: you can redistribute it and/or modify
-## it under the terms of the GNU General Public License as published by
-## the Free Software Foundation, either version 3 of the License, or
-## (at your option) any later version.
-##
-## Microscope is distributed in the hope that it will be useful,
-## but WITHOUT ANY WARRANTY; without even the implied warranty of
-## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-## GNU General Public License for more details.
-##
-## You should have received a copy of the GNU General Public License
-## along with Microscope.  If not, see <http://www.gnu.org/licenses/>.
+# Copyright (C) 2017-2020 David Pinto <david.pinto@bioch.ox.ac.uk>
+# Copyright (C) 2016-2020 Mick Phillips <mick.phillips@gmail.com>
+#
+# Microscope is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Microscope is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Microscope.  If not, see <http://www.gnu.org/licenses/>.
 
 """Classes for control of microscope components.
 
@@ -54,29 +54,32 @@ Binning = namedtuple('Binning', ['h', 'v'])
 # Trigger types.
 (TRIGGER_AFTER, TRIGGER_BEFORE, TRIGGER_DURATION, TRIGGER_SOFT) = range(4)
 
-# Mapping of setting data types to descriptors allowed-value description types.
-# For python 2 and 3 compatibility, we convert the type into a descriptor string.
-# This avoids problems with, say a python 2 client recognising a python 3
-# <class 'int'> as a python 2 <type 'int'>.
-DTYPES = {'int': ('int', tuple),
-          'float': ('float', tuple),
-          'bool': ('bool', type(None)),
-          'enum': ('enum', list, EnumMeta, dict, tuple),
-          'str': ('str', int),
-          'tuple': ('tuple', type(None)),
-          int: ('int', tuple),
-          float: ('float', tuple),
-          bool: ('bool', type(None)),
-          str: ('str', int),
-          tuple: ('tuple', type(None))}
-
-# A utility function to call callables or return value of non-callables.
-# noinspection PyPep8
-_call_if_callable = lambda f: f() if callable(f) else f
+# Mapping of setting data types descriptors to allowed-value types.
+#
+# We use a descriptor for the type instead of the actual type because
+# there may not be a unique proper type as for example in enum.
+DTYPES = {
+    'int': (tuple,),
+    'float': (tuple,),
+    'bool': (type(None),),
+    'enum': (list, EnumMeta, dict, tuple),
+    'str': (int,),
+    'tuple': (type(None),),
+}
 
 
-class Setting():
-    def __init__(self, name, dtype, get_func, set_func=None, values=None, readonly=False):
+def _call_if_callable(f):
+    """Call callables, or return value of non-callables."""
+    return f() if callable(f) else f
+
+
+class _Setting():
+    # TODO: refactor into subclasses to avoid if isinstance .. elif .. else.
+    # Settings classes should be private: devices should use a factory method
+    # rather than instantiate settings directly; most already use add_setting
+    # for this.
+    def __init__(self, name, dtype, get_func, set_func=None, values=None,
+                 readonly=False):
         """Create a setting.
 
         :param name: the setting's name
@@ -98,10 +101,11 @@ class Setting():
         self.name = name
         if dtype not in DTYPES:
             raise Exception('Unsupported dtype.')
-        elif not (isinstance(values, DTYPES[dtype][1:]) or callable(values)):
-            raise Exception("Invalid values type for %s '%s': expected function or %s" %
-                            (dtype, name, DTYPES[dtype][1:]))
-        self.dtype = DTYPES[dtype][0]
+        elif not (isinstance(values, DTYPES[dtype]) or callable(values)):
+            raise Exception("Invalid values type for %s '%s':"
+                            " expected function or %s"
+                            % (dtype, name, DTYPES[dtype]))
+        self.dtype = dtype
         self._get = get_func
         self._values = values
         self._readonly = readonly
@@ -116,8 +120,8 @@ class Setting():
             self._set = w
 
     def describe(self):
-        return {  # wrap type in str since can't serialize types
-            'type': str(self.dtype),
+        return {
+            'type': self.dtype,
             'values': self.values(),
             'readonly': self.readonly(),
             'cached': self._last_written is not None}
@@ -149,7 +153,7 @@ class Setting():
             return [(v.value, v.name) for v in self._values]
         values = _call_if_callable(self._values)
         if values is not None:
-            if self.dtype is 'enum':
+            if self.dtype == 'enum':
                 if isinstance(values, dict):
                     return list(values.items())
                 else:
@@ -202,16 +206,14 @@ class Device(metaclass=abc.ABCMeta):
     def __init__(self, index=None):
         self.enabled = None
         # A list of settings. (Can't serialize OrderedDict, so use {}.)
-        self.settings = OrderedDict()
+        self._settings = OrderedDict()
         self._index = index
 
     def __del__(self):
         self.shutdown()
 
-
     def get_is_enabled(self):
         return self.enabled
-
 
     def _on_disable(self):
         """Do any device-specific work on disable.
@@ -256,7 +258,7 @@ class Device(metaclass=abc.ABCMeta):
         try:
             self.disable()
         except Exception as e:
-            _logger.debug("Exception in disable() during shutdown: %s" % e)
+            _logger.warning("Exception in disable() during shutdown: %s", e)
         _logger.info("Shutting down ... ... ...")
         self._on_shutdown()
         _logger.info("... ... ... ... shut down completed.")
@@ -265,10 +267,9 @@ class Device(metaclass=abc.ABCMeta):
         """Put the device into a safe state."""
         pass
 
-    def add_setting(self, name, dtype, get_func, set_func, values, readonly=False):
+    def add_setting(self, name, dtype, get_func, set_func, values,
+                    readonly=False):
         """Add a setting definition.
-
-        Can also use self.settings[name] = Setting(name, dtype,...)
 
         :param name: the setting's name
         :param dtype: a data type from ('int', 'float', 'bool', 'enum', 'str')
@@ -289,61 +290,55 @@ class Device(metaclass=abc.ABCMeta):
         """
         if dtype not in DTYPES:
             raise Exception('Unsupported dtype.')
-        elif not (isinstance(values, DTYPES[dtype][1:]) or callable(values)):
-            raise Exception("Invalid values type for %s '%s': expected function or %s" %
-                            (dtype, name, DTYPES[dtype][1:]))
+        elif not (isinstance(values, DTYPES[dtype]) or callable(values)):
+            raise Exception("Invalid values type for %s '%s':"
+                            " expected function or %s"
+                            % (dtype, name, DTYPES[dtype]))
         else:
-            self.settings[name] = Setting(name, dtype, get_func, set_func, values, readonly)
+            self._settings[name] = _Setting(name, dtype, get_func, set_func,
+                                            values, readonly)
 
     def get_setting(self, name):
         """Return the current value of a setting."""
         try:
-            return self.settings[name].get()
+            return self._settings[name].get()
         except Exception as err:
-            _logger.error("in get_setting(%s):" % (name), exc_info=err)
+            _logger.error("in get_setting(%s):", name, exc_info=err)
             raise
 
     def get_all_settings(self):
         """Return ordered settings as a list of dicts."""
         # Fetching some settings may fail depending on device state.
-        # Fetch those that are available, and report failures in __errors__.
-        # TODO - cockpit may need changes to prevent exceptions due to
-        # presence of unexpected settings entry, __errors__.
-        def catch(f, errors):
+        # Report these values as 'None' and continue fetching other settings.
+        def catch(f):
             try:
                 return f()
             except Exception as err:
-                _logger.error("getting %s: %s" % (f.__self__.name, err))
-                errors.append(f.__self__.name)
+                _logger.error("getting %s: %s", f.__self__.name, err)
                 return None
-
-        errors = []
-        settings = {k: catch(v.get, errors) for k, v in self.settings.items()}
-        if errors:
-            settings.update({"__errors__": errors})
-        return settings
+        return {k: catch(v.get) for k, v in self._settings.items()}
 
     def set_setting(self, name, value):
         """Set a setting."""
         try:
-            self.settings[name].set(value)
+            self._settings[name].set(value)
         except Exception as err:
-            _logger.error("in set_setting(%s):" % (name), exc_info=err)
+            _logger.error("in set_setting(%s):", name, exc_info=err)
             raise
 
     def describe_setting(self, name):
         """Return ordered setting descriptions as a list of dicts."""
-        return self.settings[name].describe()
+        return self._settings[name].describe()
 
     def describe_settings(self):
         """Return ordered setting descriptions as a list of dicts."""
-        return [(k, v.describe()) for (k, v) in self.settings.items()]
+        return [(k, v.describe()) for (k, v) in self._settings.items()]
 
     def update_settings(self, incoming, init=False):
         """Update settings based on dict of settings and values."""
         if init:
             # Assume nothing about state: set everything.
-            my_keys = set(self.settings.keys())
+            my_keys = set(self._settings.keys())
             their_keys = set(incoming.keys())
             update_keys = my_keys & their_keys
             if update_keys != my_keys:
@@ -353,24 +348,24 @@ class Device(metaclass=abc.ABCMeta):
                 raise Exception(msg)
         else:
             # Only update changed values.
-            my_keys = set(self.settings.keys())
+            my_keys = set(self._settings.keys())
             their_keys = set(incoming.keys())
             update_keys = set(key for key in my_keys & their_keys
                               if self.get_setting(key) != incoming[key])
         results = {}
         # Update values.
         for key in update_keys:
-            if key not in my_keys or not self.settings[key].set:
+            if key not in my_keys or not self._settings[key].set:
                 # Setting not recognised or no set function implemented
                 results[key] = NotImplemented
                 update_keys.remove(key)
                 continue
-            if _call_if_callable(self.settings[key].readonly):
+            if _call_if_callable(self._settings[key].readonly):
                 continue
-            self.settings[key].set(incoming[key])
+            self._settings[key].set(incoming[key])
         # Read back values in second loop.
         for key in update_keys:
-            results[key] = self.settings[key].get()
+            results[key] = self._settings[key].get()
         return results
 
 
@@ -473,7 +468,6 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
             _logger.debug("... enabled.")
         return self.enabled
 
-
     def disable(self):
         """Disable the data capture device.
 
@@ -513,13 +507,14 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
             # this function name as an argument to set_client, but
             # not sure how to subsequently resolve this over Pyro.
             client.receiveData(data, timestamp)
-        except (Pyro4.errors.ConnectionClosedError, Pyro4.errors.CommunicationError):
+        except (Pyro4.errors.ConnectionClosedError,
+                Pyro4.errors.CommunicationError):
             # Client not listening
-            _logger.info("Removing %s from client stack: disconnected."
-                         % client._pyroUri)
+            _logger.info("Removing %s from client stack: disconnected.",
+                         client._pyroUri)
             self._clientStack = list(filter(client.__ne__, self._clientStack))
             self._liveClients = self._liveClients.difference([client])
-        except:
+        except Exception:
             raise
 
     def _dispatch_loop(self):
@@ -537,12 +532,13 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
                     err = e
             else:
                 try:
-                    self._send_data(client, self._process_data(data), timestamp)
+                    self._send_data(client, self._process_data(data),
+                                    timestamp)
                 except Exception as e:
                     err = e
             if err:
-                # Raising an exception will kill the dispatch loop. We need another
-                # way to notify the client that there was a problem.
+                # Raising an exception will kill the dispatch loop. We need
+                # another way to notify the client that there was a problem.
                 _logger.error("in _dispatch_loop:", exc_info=err)
             self._dispatch_buffer.task_done()
 
@@ -555,13 +551,13 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
                 data = self._fetch_data()
             except Exception as e:
                 _logger.error("in _fetch_loop:", exc_info=e)
-                # Raising an exception will kill the fetch loop. We need another
-                # way to notify the client that there was a problem.
+                # Raising an exception will kill the fetch loop. We need
+                # another way to notify the client that there was a problem.
                 timestamp = time.time()
                 self._put(e, timestamp)
                 data = None
             if data is not None:
-                # ***TODO*** Add support for timestamp from hardware.
+                # TODO Add support for timestamp from hardware.
                 timestamp = time.time()
                 self._put(data, timestamp)
             else:
@@ -612,8 +608,7 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
         if self._client is None:
             _logger.info("Current client is None.")
         else:
-            _logger.info("Current client is %s." % str(self._client))
-
+            _logger.info("Current client is %s.", str(self._client))
 
     @keep_acquiring
     def update_settings(self, settings, init=False):
@@ -698,11 +693,14 @@ class CameraDevice(DataDevice):
         rot = self._transform[2]
 
         # Choose appropriate transform based on (flips, rot).
-        data = {(0, 0): numpy.rot90(data, rot),
-               (0, 1): numpy.flipud(numpy.rot90(data, rot)),
-               (1, 0): numpy.fliplr(numpy.rot90(data, rot)),
-               (1, 1): numpy.fliplr(numpy.flipud(numpy.rot90(data, rot)))
-               }[flips]
+        # Do rotation
+        data = numpy.rot90(data, rot)
+        # Flip
+        data = {(0, 0): lambda d: d,
+                (0, 1): numpy.flipud,
+                (1, 0): numpy.fliplr,
+                (1, 1): lambda d: numpy.fliplr(numpy.flipud(d))
+                }[flips](data)
         return super()._process_data(data)
 
     def set_readout_mode(self, description):
@@ -718,7 +716,8 @@ class CameraDevice(DataDevice):
         if isinstance(transform, str):
             transform = literal_eval(transform)
         self._client_transform = transform
-        lr, ud, rot = (self._readout_transform[i] ^ transform[i] for i in range(3))
+        lr, ud, rot = (self._readout_transform[i] ^ transform[i]
+                       for i in range(3))
         if self._readout_transform[2] and self._client_transform[2]:
             lr = not lr
             ud = not ud
@@ -768,7 +767,7 @@ class CameraDevice(DataDevice):
         pass
 
     def get_binning(self):
-        """Return a tuple of (horizontal, vertical), corrected for transform."""
+        """Return a tuple of (horizontal, vertical) corrected for transform."""
         binning = self._get_binning()
         if self._transform[2]:
             # 90 degree rotation
@@ -793,7 +792,7 @@ class CameraDevice(DataDevice):
     @abc.abstractmethod
     def _get_roi(self):
         """Return the ROI as it is on hardware."""
-        return ROI(left, top, width, height)
+        raise NotImplementedError()
 
     def get_roi(self):
         """Return ROI as a rectangle (left, top, width, height).
@@ -818,9 +817,9 @@ class CameraDevice(DataDevice):
         maxw, maxh = self.get_sensor_shape()
         binning = self.get_binning()
         left, top, width, height = roi
-        if not width: # 0 or None
+        if not width:  # 0 or None
             width = maxw // binning.h
-        if not height: # 0 o rNone
+        if not height:  # 0 or None
             height = maxh // binning.v
         if self._transform[2]:
             roi = ROI(left, top, height, width)
@@ -853,6 +852,7 @@ class TriggerType(Enum):
     FALLING_EDGE = 2
     PULSE = 3
 
+
 class TriggerMode(Enum):
     ONCE = 1
     BULB = 2
@@ -863,9 +863,6 @@ class TriggerMode(Enum):
 class TriggerTargetMixIn(metaclass=abc.ABCMeta):
     """MixIn for Device that may be the target of a hardware trigger.
 
-    Subclasses must set a `_trigger_type` and `_trigger_mode` property
-    with the current trigger during object construction.
-
     TODO: need some way to retrieve the supported trigger types and
         modes.  We could require subclasses to define `_trigger_types`
         and `_trigger_modes` listing what is supported but would still
@@ -874,14 +871,17 @@ class TriggerTargetMixIn(metaclass=abc.ABCMeta):
 
     """
     @property
-    def trigger_mode(self):
-        return self._trigger_mode
+    @abc.abstractmethod
+    def trigger_mode(self) -> TriggerMode:
+        raise NotImplementedError()
+
     @property
-    def trigger_type(self):
-        return self._trigger_type
+    @abc.abstractmethod
+    def trigger_type(self) -> TriggerType:
+        raise NotImplementedError()
 
     @abc.abstractmethod
-    def set_trigger(self, ttype, tmode):
+    def set_trigger(self, ttype: TriggerType, tmode: TriggerMode) -> None:
         """Set device for a specific trigger.
         """
         pass
@@ -899,11 +899,11 @@ class SerialDeviceMixIn(metaclass=abc.ABCMeta):
     """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        ## TODO: We should probably construct the connection here but
-        ##       the Serial constructor takes a lot of arguments, and
-        ##       it becomes tricky to separate those from arguments to
-        ##       the constructor of other parent classes.
-        self.connection = None # serial.Serial (to be constructed by child)
+        # TODO: We should probably construct the connection here but
+        #       the Serial constructor takes a lot of arguments, and
+        #       it becomes tricky to separate those from arguments to
+        #       the constructor of other parent classes.
+        self.connection = None  # serial.Serial (to be constructed by child)
         self._comms_lock = threading.RLock()
 
     def _readline(self):
@@ -966,23 +966,19 @@ class DeformableMirror(Device, metaclass=abc.ABCMeta):
     def __init__(self, **kwargs) -> None:
         """Constructor.
 
-        Subclasses must define the following properties during
-        construction:
-
-            _n_actuators : int
-
-        In addition, the private properties `_patterns` and
-        `_pattern_idx` are initialized to None to support the queueing
-        of patterns and software triggering.
+        The private properties `_patterns` and `_pattern_idx` are
+        initialized to `None` to support the queueing of patterns and
+        software triggering.
         """
         super().__init__(**kwargs)
 
-        self._patterns = None # type: typing.Optional[numpy.ndarray]
-        self._pattern_idx = -1 # type: int
+        self._patterns = None  # type: typing.Optional[numpy.ndarray]
+        self._pattern_idx = -1  # type: int
 
     @property
+    @abc.abstractmethod
     def n_actuators(self) -> int:
-        return self._n_actuators
+        raise NotImplementedError()
 
     def _validate_patterns(self, patterns: numpy.ndarray) -> None:
         """Validate the shape of a series of patterns.
@@ -996,10 +992,10 @@ class DeformableMirror(Device, metaclass=abc.ABCMeta):
         if patterns.ndim > 2:
             raise Exception("PATTERNS has %d dimensions (must be 1 or 2)"
                             % patterns.ndim)
-        elif patterns.shape[-1] != self._n_actuators:
+        elif patterns.shape[-1] != self.n_actuators:
             raise Exception(("PATTERNS length of second dimension '%d' differs"
                              " differs from number of actuators '%d'"
-                             % (patterns.shape[-1], self._n_actuators)))
+                             % (patterns.shape[-1], self.n_actuators)))
 
     @abc.abstractmethod
     def apply_pattern(self, pattern: numpy.ndarray) -> None:
@@ -1022,7 +1018,7 @@ class DeformableMirror(Device, metaclass=abc.ABCMeta):
         """
         self._validate_patterns(patterns)
         self._patterns = patterns
-        self._pattern_idx = -1 # none is applied yet
+        self._pattern_idx = -1  # none is applied yet
 
     def next_pattern(self) -> None:
         """Apply the next pattern in the queue.
@@ -1032,7 +1028,7 @@ class DeformableMirror(Device, metaclass=abc.ABCMeta):
         if self._patterns is None:
             raise Exception("no pattern queued to apply")
         self._pattern_idx += 1
-        self.apply_pattern(self._patterns[self._pattern_idx,:])
+        self.apply_pattern(self._patterns[self._pattern_idx, :])
 
     def initialize(self) -> None:
         pass
@@ -1101,16 +1097,17 @@ class LaserDevice(Device, metaclass=abc.ABCMeta):
 
 
 class FilterWheelBase(Device, metaclass=abc.ABCMeta):
-    def __init__(self, filters: typing.Union[typing.Mapping[int, str], typing.Iterable] = [],
+    def __init__(self, filters: typing.Union[typing.Mapping[int, str],
+                                             typing.Iterable] = [],
                  positions: int = 0, **kwargs) -> None:
         super().__init__(**kwargs)
         if isinstance(filters, dict):
             self._filters = filters
         else:
-            self._filters = {i:f for (i, f) in enumerate(filters)}
+            self._filters = {i: f for (i, f) in enumerate(filters)}
         self._inv_filters = {val: key for key, val in self._filters.items()}
         if not hasattr(self, '_positions'):
-            self._positions = positions # type: int
+            self._positions = positions  # type: int
         # The position as an integer.
         # Deprecated: clients should call get_position and set_position;
         # still exposed as a setting until cockpit uses set_position.
@@ -1118,12 +1115,11 @@ class FilterWheelBase(Device, metaclass=abc.ABCMeta):
                          'int',
                          self.get_position,
                          self.set_position,
-                         lambda: (0, self.get_num_positions()) )
-
+                         lambda: (0, self.get_num_positions()))
 
     def get_num_positions(self) -> int:
         """Returns the number of wheel positions."""
-        return(max( self._positions, len(self._filters)))
+        return(max(self._positions, len(self._filters)))
 
     @abc.abstractmethod
     def get_position(self) -> int:
@@ -1136,7 +1132,7 @@ class FilterWheelBase(Device, metaclass=abc.ABCMeta):
         pass
 
     def get_filters(self) -> typing.List[typing.Tuple[int, str]]:
-        return [(k,v) for k,v in self._filters.items()]
+        return [(k, v) for k, v in self._filters.items()]
 
 
 class ControllerDevice(Device, metaclass=abc.ABCMeta):
@@ -1157,7 +1153,6 @@ class ControllerDevice(Device, metaclass=abc.ABCMeta):
     their shutdown and initialisation.
 
     """
-
     def initialize(self) -> None:
         super().initialize()
         for d in self.devices.values():
@@ -1173,3 +1168,216 @@ class ControllerDevice(Device, metaclass=abc.ABCMeta):
         for d in self.devices.values():
             d.shutdown()
         super()._on_shutdown()
+
+
+# XXX: once python>=3.6 is required, subclass from typing.NamedTuple
+# instead.
+AxisLimits = typing.NamedTuple('AxisLimits',[('lower', float),
+                                             ('upper', float)])
+
+class StageAxis(metaclass=abc.ABCMeta):
+    """A single dimension axis for a :class:`StageDevice`.
+
+    A `StageAxis` represents a single axis of a stage and is not a
+    :class:`Device` instance on itself.  Even stages with a single
+    axis, such as Z-axis piezos, are implemented as a `StageDevice`
+    composed of a single `StageAxis` instance.
+
+    The interface for `StageAxis` maps to that of `StageDevice` so
+    refer to its documentation.
+
+    """
+    @abc.abstractmethod
+    def move_by(self, delta: float) -> None:
+        """Move axis by given amount."""
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def move_to(self, pos: float) -> None:
+        """Move axis to specified position."""
+        raise NotImplementedError()
+
+    @property
+    @abc.abstractmethod
+    def position(self) -> float:
+        """Current axis position."""
+        raise NotImplementedError()
+
+    @property
+    @abc.abstractmethod
+    def limits(self) -> AxisLimits:
+        """Upper and lower limits values for position."""
+        raise NotImplementedError()
+
+
+class StageDevice(Device, metaclass=abc.ABCMeta):
+    """A stage device, composed of :class:`StageAxis` instances.
+
+    A stage device can have any number of axes and dimensions.  For a
+    single `StageDevice` instance each axis has a name that uniquely
+    identifies it.  The names of the individual axes are hardware
+    dependent and will be part of the concrete class documentation.
+    They are typically strings such as `"x"` or `"y"`.
+
+    .. code-block:: python
+
+        stage = SomeStageDevice()
+        stage.initialize()
+        stage.enable() # may trigger a stage move
+
+        # move operations
+        stage.move_to({'x': 42.0, 'y': -5.1})
+        stage.move_by({'x': -5.3, 'y': 14.6})
+
+        # Individual StageAxis can be controlled directly.
+        x_axis = stage.axes['x']
+        y_axis = stage.axes['y']
+        x_axis.move_to(42.0)
+        y_axis.move_by(-5.3)
+
+    Not all stage devices support simultaneous move of multiple axes.
+    Because of this, there is no guarantee that move operations with
+    multiple axes are done simultaneously.  Refer to the concrete
+    class documentation for hardware specific details.
+
+    If a move operation involves multiple axes and there is no support
+    for simultaneous move, the order of the moves is undefined.  If a
+    specific order is required, one can either call the move functions
+    multiple times in the expected order, or do so via the individual
+    axes, like so:
+
+    .. code-block:: python
+
+        # Move the x axis first, then mvoe the y axis:
+        stage.move_by({'x': 10})
+        stage.move_by({'y': 4})
+
+        # The same thing but via the individual axes:
+        stage.axes['x'].move_by(10)
+        stage.axes['y'].move_by(4)
+
+    Move operations will not attempt to move a stage beyond its
+    limits.  If a call to the move functions would require the stage
+    to move beyond its limits the move operation is clipped to the
+    axes limits.  No exception is raised.
+
+    .. code-block:: python
+
+        # Moves x axis to the its upper limit:
+        x_axis.move_to(x_axis.limits.upper)
+
+        # The same as above since the move operations are clipped to
+        # the axes limits automatically.
+        import math
+        x_axis.move_to(math.inf)
+        x_axis.move_by(math.inf)
+
+    Some stages need to find a reference position, home, before being
+    able to be moved.  If required, this happens automatically during
+    :func:`enable`.
+
+    """
+
+    @property
+    @abc.abstractmethod
+    def axes(self) -> typing.Mapping[str, StageAxis]:
+        """Map of axis names to the corresponding :class:`StageAxis`.
+
+        .. code-block:: python
+
+            for name, axis in stage.axes.items():
+                print(f'moving axis named {name}')
+                axis.move_by(1)
+
+        If an axis is not available then it is not included, i.e.,
+        given a stage with optional axes the missing axes will *not*
+        appear on the returned dict with a value of `None` or some
+        other special `StageAxis` instance.
+
+        """
+        raise NotImplementedError()
+
+    @property
+    def position(self) -> typing.Mapping[str, float]:
+        """Map of axis name to their current position.
+
+        .. code-block:: python
+
+            for name, position in stage.position.items():
+                print(f'{name} axis is at position {position}')
+
+        The units of the position is the same as the ones being
+        currently used for the absolute move (:func:`move_to`)
+        operations.
+
+        """
+        return {name: axis.position for name, axis in self.axes.items()}
+
+    @property
+    def limits(self) -> typing.Mapping[str, AxisLimits]:
+        """Map of axis name to its upper and lower limits.
+
+        .. code-block:: python
+
+            for name, limits in stage.limits.items():
+                print(f'{name} axis lower limit is {limits.lower}')
+                print(f'{name} axis upper limit is {limits.upper}')
+
+        These are the limits currently imposed by the device or
+        underlying software and may change over the time of the
+        `StageDevice` object.
+
+        The units of the limits is the same as the ones being
+        currently used for the move operations.
+
+        """
+        return {name: axis.limits for name, axis in self.axes.items()}
+
+    @abc.abstractmethod
+    def move_by(self, delta: typing.Mapping[str, float]) -> None:
+        """Move axes by the corresponding amounts.
+
+        Args:
+            delta: map of axis name to the amount to be moved.
+
+        .. code-block:: python
+
+            # Move 'x' axis by 10.2 units and the y axis by -5 units:
+            stage.move_by({'x': 10.2, 'y': -5})
+
+            # The above is equivalent, but possibly faster than:
+            stage.axes['x'].move_by(10.2)
+            stage.axes['y'].move_by(-5)
+
+        The axes will not move beyond :func:`limits`.  If `delta`
+        would move an axis beyond it limit, no exception is raised.
+        Instead, the stage will move until the axis limit.
+
+        """
+        # TODO: implement a software fallback that moves the
+        # individual axis, for stages that don't have provide
+        # simultaneous move of multiple axes.
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def move_to(self, position: typing.Mapping[str, float]) -> None:
+        """Move axes to the corresponding positions.
+
+        Args:
+            position: map of axis name to the positions to move to.
+
+        .. code-block:: python
+
+            # Move 'x' axis to position 8 and the y axis to position -5.3
+            stage.move_to({'x': 8, 'y': -5.3})
+
+            # The above is equivalent to
+            stage.axes['x'].move_to(8)
+            stage.axes['y'].move_to(-5.3)
+
+        The axes will not move beyond :func:`limits`.  If `positions`
+        is beyond the limits, no exception is raised.  Instead, the
+        stage will move until the axes limit.
+
+        """
+        raise NotImplementedError()
