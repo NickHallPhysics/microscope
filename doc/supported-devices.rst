@@ -1,4 +1,4 @@
-.. Copyright (C) 2017 David Pinto <david.pinto@bioch.ox.ac.uk>
+.. Copyright (C) 2020 David Miguel Susano Pinto <carandraug@gmail.com>
 
    Permission is granted to copy, distribute and/or modify this
    document under the terms of the GNU Free Documentation License,
@@ -32,9 +32,10 @@ Filter Wheels
 - Aurox Clarity (:class:`microscope.filterwheels.aurox`)
 - Prior (:class:`microscope.controllers.prior`)
 - Thorlabs (:class:`microscope.filterwheels.thorlabs`)
+- Zaber (:class:`microscope.controllers.zaber.ZaberDaisyChain`)
 
-Lasers
-------
+Light Sources
+-------------
 
 - Cobolt (:class:`microscope.lasers.cobolt`)
 - Coherent Obis (:class:`microscope.lasers.obis`)
@@ -45,5 +46,14 @@ Lasers
 Controllers
 -----------
 
+- CoolLED (:class:`microscope.controllers.coolled`)
 - Prior ProScan III (:class:`microscope.controllers.prior`)
 - Lumencor Spectra III light engine (:class:`microscope.controllers.lumencor`)
+- Zaber daisy chain devices
+  (:class:`microscope.controllers.zaber.ZaberDaisyChain`)
+- Zaber LED controller (:class:`microscope.controllers.zaber.ZaberDaisyChain`)
+
+Stages
+------
+
+- Zaber (:class:`microscope.controllers.zaber.ZaberDaisyChain`)
