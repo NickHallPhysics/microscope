@@ -43,6 +43,7 @@ from qtpy import QtCore, QtGui, QtWidgets
 
 import microscope.abc
 
+
 _logger = logging.getLogger(__name__)
 
 
@@ -71,12 +72,66 @@ class DeviceSettingsWidget(QtWidgets.QWidget):
         self.setLayout(layout)
 
 
+class ControllerWidget(QtWidgets.QWidget):
+    """Show devices in a controller.
+
+    This widget shows a series of buttons with the name of the
+    multiple devices in a controller.  Toggling those buttons displays
+    or hides a widget for that controlled device.
+
+    """
+
+    def __init__(
+        self, device: microscope.abc.Controller, *args, **kwargs
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._device = device
+
+        self._button2window: typing.Dict[
+            QtWidgets.QPushButton, typing.Optional[QtWidgets.QMainWindow]
+        ] = {}
+        self._button2name: typing.Dict[QtWidgets.QPushButton, str] = {}
+
+        self._button_grp = QtWidgets.QButtonGroup(self)
+        self._button_grp.setExclusive(False)
+        for name in self._device.devices.keys():
+            button = QtWidgets.QPushButton(name, parent=self)
+            button.setCheckable(True)
+            self._button_grp.addButton(button)
+            self._button2name[button] = name
+            self._button2window[button] = None
+        self._button_grp.buttonToggled.connect(self.toggleDeviceWidget)
+
+        layout = QtWidgets.QVBoxLayout()
+        for button in self._button_grp.buttons():
+            layout.addWidget(button)
+        self.setLayout(layout)
+
+    def toggleDeviceWidget(
+        self, button: QtWidgets.QAbstractButton, checked: bool
+    ) -> None:
+        if checked:
+            device = self._device.devices[self._button2name[button]]
+            widget_cls = _guess_device_widget(device)
+            widget = widget_cls(device)
+            window = MainWindow(widget, parent=self)
+            self._button2window[button] = window
+            window.show()
+        else:
+            window = self._button2window[button]
+            if window is None:
+                _logger.error(
+                    "unchecking subdevice button but there's no window"
+                )
+            else:
+                window.close()
+                self._button2window[button] = None
+
+
 class _DataQueue(queue.Queue):
-    # FIXME: DataDevice should be able to use a normal Queue, we
-    # shouldn't need to have a class with receiveData method.
     @Pyro4.expose
-    def receiveData(self, *args):
-        self.put(args)
+    def put(self, *args, **kwargs):
+        return super().put(*args, **kwargs)
 
 
 class _Imager(QtCore.QObject):
@@ -107,10 +162,7 @@ class _Imager(QtCore.QObject):
         self.destroyed.connect(lambda: self._camera.set_client(None))
 
     def snap(self) -> None:
-        # CameraDevice have a soft_trigger method but it may do
-        # nothing.  If the camera is a TriggerTargetMixin, then it
-        # will have a trigger method that does work.
-        getattr(self._camera, "trigger", self._camera.soft_trigger)()
+        self._camera.trigger()
 
     def fetchLoop(self) -> None:
         while True:
@@ -119,9 +171,9 @@ class _Imager(QtCore.QObject):
             # rest (we could do with a class that only has one item
             # and putting a new item will discard the previous instead
             # of blocking/queue).
-            data = self._data_queue.get()[0]
+            data = self._data_queue.get()
             while not self._data_queue.empty():
-                data = self._data_queue.get()[0]
+                data = self._data_queue.get()
             self.imageAcquired.emit(data)
 
 
@@ -186,7 +238,9 @@ class CameraWidget(QtWidgets.QWidget):
             numpy.dtype("uint8"): QtGui.QImage.Format_Grayscale8,
             numpy.dtype("uint16"): QtGui.QImage.Format_Grayscale16,
         }
-        qt_img = QtGui.QImage(data.tobytes(), *data.shape, np_to_qt[data.dtype])
+        qt_img = QtGui.QImage(
+            data.tobytes(), *data.shape, np_to_qt[data.dtype]
+        )
         self._view.setPixmap(QtGui.QPixmap.fromImage(qt_img))
 
 
@@ -288,6 +342,73 @@ class FilterWheelWidget(QtWidgets.QWidget):
         self._device.position = self._button_grp.checkedId()
 
 
+class LightSourceWidget(QtWidgets.QWidget):
+    def __init__(
+        self, device: microscope.abc.LightSource, *args, **kwargs
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._device = device
+
+        self._enable_check = QtWidgets.QCheckBox("Enabled", parent=self)
+        self._enable_check.stateChanged.connect(self.updateEnableState)
+
+        self._set_power_box = QtWidgets.QDoubleSpinBox(parent=self)
+        self._set_power_box.setMinimum(0.0)
+        self._set_power_box.setMaximum(1.0)
+        self._set_power_box.setValue(self._device.power)
+        self._set_power_box.setSingleStep(0.01)
+        self._set_power_box.setAlignment(QtCore.Qt.AlignRight)
+        self._set_power_box.valueChanged.connect(
+            lambda x: setattr(self._device, "power", x)
+        )
+
+        self._current_power = QtWidgets.QLineEdit(
+            str(self._device.power), parent=self
+        )
+        self._current_power.setReadOnly(True)
+        self._current_power.setAlignment(QtCore.Qt.AlignRight)
+
+        self._get_power_timer = QtCore.QTimer(self)
+        self._get_power_timer.timeout.connect(self.updateCurrentPower)
+        self._get_power_timer.setInterval(500)  # msec
+
+        self.updateEnableState()
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(self._enable_check)
+        power_layout = QtWidgets.QFormLayout()
+        power_layout.addRow("Set power", self._set_power_box)
+        power_layout.addRow("Current power", self._current_power)
+        layout.addLayout(power_layout)
+        self.setLayout(layout)
+
+    def updateEnableState(self) -> None:
+        """Update UI and light source state after enable check box"""
+        if self._enable_check.isChecked():
+            self._device.enable()
+        else:
+            self._device.disable()
+
+        device_is_enabled = self._device.get_is_enabled()
+
+        if self._enable_check.isChecked() != device_is_enabled:
+            self._enable_check.setChecked(device_is_enabled)
+            _logger.error(
+                "failed to %s light",
+                "enable" if self._enable_check.isChecked() else "disable",
+            )
+
+        self._current_power.setEnabled(device_is_enabled)
+        if device_is_enabled:
+            self._get_power_timer.start()
+        else:
+            self._get_power_timer.stop()
+            self._current_power.setText("0.0")
+
+    def updateCurrentPower(self) -> None:
+        self._current_power.setText(str(self._device.power))
+
+
 class StageWidget(QtWidgets.QWidget):
     """Stage widget displaying each of the axis position.
 
@@ -328,8 +449,8 @@ class StageWidget(QtWidgets.QWidget):
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self, widget: QtWidgets.QWidget) -> None:
-        super().__init__()
+    def __init__(self, widget: QtWidgets.QWidget, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -344,6 +465,25 @@ class MainWindow(QtWidgets.QMainWindow):
             shortcut.activated.connect(slot)
 
 
+def _guess_device_widget(device) -> QtWidgets.QWidget:
+    if hasattr(device, "axes"):
+        return StageWidget
+    elif hasattr(device, "devices"):
+        return ControllerWidget
+    elif hasattr(device, "n_positions"):
+        return FilterWheelWidget
+    elif hasattr(device, "power"):
+        return LightSourceWidget
+    elif hasattr(device, "n_actuators"):
+        return DeformableMirrorWidget
+    elif hasattr(device, "get_sensor_shape"):
+        return CameraWidget
+    elif hasattr(device, "get_all_settings"):
+        return DeviceSettingsWidget
+    else:
+        raise TypeError("device is not a Microscope Device")
+
+
 def main(argv: typing.Sequence[str]) -> int:
     app = QtWidgets.QApplication(argv)
     app.setApplicationName("Microscope GUI")
@@ -351,21 +491,32 @@ def main(argv: typing.Sequence[str]) -> int:
 
     type_to_widget = {
         "Camera": CameraWidget,
+        "Controller": ControllerWidget,
         "DeformableMirror": DeformableMirrorWidget,
         "DeviceSettings": DeviceSettingsWidget,
         "FilterWheel": FilterWheelWidget,
+        "LightSourceWidget": LightSourceWidget,
         "Stage": StageWidget,
     }
 
     parser = argparse.ArgumentParser(prog="microscope-gui")
+
+    # Although we have a function that can guess the device type from
+    # the attributes on the proxy this is still useful.  For example,
+    # to display the device settings instead of the device UI.  Or
+    # maybe we're dealing with a device that implements more than one
+    # interface (earlier iterations of aurox Clarity were both a
+    # camera and a filterwheel).  This option provides a way to force
+    # a specific widget.
     parser.add_argument(
         "type",
         action="store",
         type=str,
         metavar="DEVICE-TYPE",
         choices=type_to_widget.keys(),
-        help="Type of device",
+        help="Type of device/widget to show",
     )
+
     parser.add_argument(
         "uri",
         action="store",

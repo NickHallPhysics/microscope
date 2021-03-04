@@ -18,13 +18,25 @@
 ## along with Microscope.  If not, see <http://www.gnu.org/licenses/>.
 
 """Win32 specific microscope classes.
+
+If called as a program, it will configure and control a Windows
+service to serve devices, similar to the device-server program.
+
+To configure and run as a Windows service use::
+
+    python -m microscope.win32 \
+        [install,remove,update,start,stop,restart,status] \
+        CONFIG-FILE
+
 """
+
 
 import multiprocessing
 import os
 import sys
 
 import servicemanager
+
 
 # These win32* modules both import win32api which is a pyd file.
 # Importing win32api can be problematic because of Windows things
@@ -61,7 +73,9 @@ class MicroscopeWindowsService(win32serviceutil.ServiceFramework):
 
     @classmethod
     def get_config_file(cls):
-        return win32serviceutil.GetServiceCustomOption(cls._svc_name_, "config")
+        return win32serviceutil.GetServiceCustomOption(
+            cls._svc_name_, "config"
+        )
 
     def log(self, message, error=False):
         if error:
@@ -115,3 +129,7 @@ def handle_command_line():
         MicroscopeWindowsService.set_config_file(configfile)
     else:
         win32serviceutil.HandleCommandLine(MicroscopeWindowsService)
+
+
+if __name__ == "__main__":
+    handle_command_line()

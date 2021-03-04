@@ -1,8 +1,12 @@
 The following is a summary of the user-visible changes for each of
 python-microscope releases.
 
-Version 0.6.0 (upcoming)
+Version 0.7.0 (upcoming)
 ------------------------
+
+
+Version 0.6.0 (2021/01/14)
+--------------------------
 
 * Selected most important, backwards incompatible, changes:
 
@@ -21,6 +25,20 @@ Version 0.6.0 (upcoming)
 
 * Changes to device ABCs:
 
+  * Device:
+
+    * The `make_safe` method was removed.  This was not an abstract
+      method and was not implemented in most devices.  In few cases
+      where it was implemented, it can be replaced with `disable`.
+
+  * Camera:
+
+    * The `get_sensor_temperature` method was removed.  This was not
+      an abstract method was only implemented on `AndorAtmcd` and
+      `XimeaCamera`.  It is now available under the settings
+      dictionary under camera specific terms if supported by the
+      device.
+
   * FilterWheel:
 
     * The `get_filters` method and the constructor `filters` argument
@@ -29,9 +47,33 @@ Version 0.6.0 (upcoming)
     * New `position` and `n_positions` properties added to replace
       `get_position`, `set_position`, and `get_num_positions` methods.
 
+  * Laser:
+
+    * This has been renamed `LightSource` since it was being used for
+      non-laser light sources.  The name remains for backwards
+      compatibility.  Similarly, all modules in ``microscope.lasers``
+      were moved to ``microscope.lights`` and previous names remain
+      for backwards compatibility.
+
+  * LightSource:
+
+    * Now implement the `TriggerTargetMixin` interface so the trigger
+      type can be configured.
+
   * TriggerTargetMixIn:
 
     * New `trigger` method for software triggers.
+
+* Device specific changes:
+
+  * Thorlabs filterwheels:
+
+    * Positions were using base 1.  This has been fixed and now uses
+      base 0.
+
+    * Instead of using the individual `ThorlabsFW102C` and
+      `ThorlabsFW212C`, use the base `ThorlabsFilterWheel` which will
+      works for both models.
 
 * New program `microscope-gui` to display simple GUIs given a Pyro URI
   for a microscope device.
@@ -51,6 +93,15 @@ Version 0.6.0 (upcoming)
 
 * The `AxisLimits, `Binning`, `ROI`, `TriggerMode`, and `TriggerType`
   classes are now available on the `microscope` module.
+
+* New `microscope.simulators.stage_aware_camera` module which provides
+  the components to simulate a microscope by simulating a camera that
+  returns regions of a larger image based on the coordinates of a
+  simulated stage and the position of a simulated filter wheel.
+
+* The multiple classes that simulate the different device types, i.e.,
+  the `Test*` classes in the `microscope.testsuite.devices` module,
+  were moved to the `microscope.simulators` subpackage.
 
 
 Version 0.5.0 (2020/03/10)

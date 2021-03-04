@@ -59,6 +59,7 @@ from ximea import xiapi
 import microscope
 import microscope.abc
 
+
 _logger = logging.getLogger(__name__)
 
 
@@ -163,13 +164,14 @@ class TrgSelectorMap(enum.Enum):
     #   first frame.
 
 
-class XimeaCamera(microscope.abc.TriggerTargetMixin, microscope.abc.Camera):
+class XimeaCamera(microscope.abc.Camera):
     """Ximea cameras
 
     Args:
-        serial_number (str): the serial number of the camera to
-            connect to.  It can be set to `None` if there is only
-            camera on the system.
+        serial_number: the serial number of the camera to connect to.
+            It can be set to `None` if there is only camera on the
+            system.
+
     """
 
     def __init__(
@@ -203,13 +205,15 @@ class XimeaCamera(microscope.abc.TriggerTargetMixin, microscope.abc.Camera):
             trg_source_names,
         )
 
+        self.initialize()
+
     def _fetch_data(self) -> typing.Optional[np.ndarray]:
         if not self._acquiring:
             return None
 
         try:
             self._handle.get_image(self._img, timeout=1)
-        except Exception as err:
+        except xiapi.Xi_error as err:
             # err.status may not exist so use getattr (see
             # https://github.com/python-microscope/vendor-issues/issues/2)
             if getattr(err, "status", None) == _XI_TIMEOUT:
@@ -285,49 +289,36 @@ class XimeaCamera(microscope.abc.TriggerTargetMixin, microscope.abc.Camera):
             microscope.TriggerType.SOFTWARE, microscope.TriggerMode.ONCE
         )
 
-        # When we return the sensor temperature we want to return the
-        # temperature that's closest to the chip since that's the one
-        # that has the biggest impact on image noise.  We don't know
-        # what temperature sensors each camera has so we try one at a
-        # time, by order of preference, until it works.
-        for temperature_selector in (
-            "XI_TEMP_IMAGE_SENSOR_DIE",
-            "XI_TEMP_IMAGE_SENSOR_DIE_RAW",
-            "XI_TEMP_SENSOR_BOARD",
-            "XI_TEMP_INTERFACE_BOARD",
-            "XI_TEMP_FRONT_HOUSING",
-            "XI_TEMP_REAR_HOUSING",
-            "XI_TEMP_TEC1_COLD",
-            "XI_TEMP_TEC1_HOT",
-        ):
+        # Add settings for the different temperature sensors.
+        for temp_param_name in [
+            "chip_temp",
+            "hous_temp",
+            "hous_back_side_temp",
+            "sensor_board_temp",
+        ]:
+            get_temp_method = getattr(self._handle, "get_" + temp_param_name)
+            # Not all cameras have temperature sensors in all
+            # locations.  We can't query if the sensor is there, we
+            # can only try to read the temperature and skip that
+            # temperature sensor if we get an exception.
             try:
-                self._handle.set_temp_selector(temperature_selector)
+                get_temp_method()
             except xiapi.Xi_error as err:
-                # We need to catch both "not supported" and "unknown
-                # parameter" but we don't understand their difference.
-                # We can definitely get both (see issue #169).
-                status = getattr(err, "status", None)
-                if status in [_XI_NOT_SUPPORTED, _XI_UNKNOWN_PARAM]:
-                    _logger.info(
-                        "no hardware support for %s temperature" " readings",
-                        temperature_selector,
-                    )
-                else:
+                if err.status != _XI_NOT_SUPPORTED:
                     raise
             else:
-                _logger.info(
-                    "temperature reading set to %s", temperature_selector
+                self.add_setting(
+                    temp_param_name,
+                    "float",
+                    get_temp_method,
+                    None,
+                    values=tuple(),
                 )
-                break
 
-    def make_safe(self):
-        if self._acquiring:
-            self.abort()
-
-    def _on_disable(self):
+    def _do_disable(self):
         self.abort()
 
-    def _on_enable(self):
+    def _do_enable(self):
         _logger.info("Preparing for acquisition.")
         if self._acquiring:
             self.abort()
@@ -353,9 +344,6 @@ class XimeaCamera(microscope.abc.TriggerTargetMixin, microscope.abc.Camera):
 
     def _get_sensor_shape(self) -> typing.Tuple[int, int]:
         return self._sensor_shape
-
-    def get_sensor_temperature(self) -> float:
-        return self._handle.get_temp()
 
     def soft_trigger(self) -> None:
         self.trigger()
@@ -415,7 +403,7 @@ class XimeaCamera(microscope.abc.TriggerTargetMixin, microscope.abc.Camera):
         self._roi = roi
         return True
 
-    def _on_shutdown(self) -> None:
+    def _do_shutdown(self) -> None:
         if self._acquiring:
             self._handle.stop_acquisition()
         if self._handle.CAM_OPEN:
@@ -424,8 +412,6 @@ class XimeaCamera(microscope.abc.TriggerTargetMixin, microscope.abc.Camera):
             # hard with error code -1009 (unknown) since the internal
             # device handler is NULL.
             self._handle.close_device()
-        else:
-            _logger.warning("shutdown() called but camera was already closed")
 
     @property
     def trigger_mode(self) -> microscope.TriggerMode:

@@ -25,6 +25,7 @@ import numpy
 import microscope
 import microscope.abc
 
+
 try:
     import microscope._wrappers.asdk as asdk
 except Exception as e:
@@ -37,6 +38,10 @@ class AlpaoDeformableMirror(microscope.abc.DeformableMirror):
     The Alpao mirrors support hardware triggers modes
     `TriggerMode.ONCE` and `TriggerMode.START`.  By default, they will
     be set for software triggering, and trigger once.
+
+    Args:
+        serial_number: the serial number of the deformable mirror,
+            something like `"BIL103"`.
     """
 
     _TriggerType_to_asdkTriggerIn = {
@@ -62,9 +67,9 @@ class AlpaoDeformableMirror(microscope.abc.DeformableMirror):
     def _find_error_str(self) -> str:
         """Get an error string from the Alpao SDK error stack.
 
-        Returns
-        -------
-        A string.  Will be empty if there was no error on the stack.
+        Returns:
+            A string with error message.  An empty string if there was
+            no error on the stack.
         """
         err_msg_buffer_len = 64
         err_msg_buffer = ctypes.create_string_buffer(err_msg_buffer_len)
@@ -89,12 +94,6 @@ class AlpaoDeformableMirror(microscope.abc.DeformableMirror):
                 raise exception_cls(msg)
 
     def __init__(self, serial_number: str, **kwargs) -> None:
-        """
-        Parameters
-        ----------
-        serial_number: string
-        The serial number of the deformable mirror, something like "BIL103".
-        """
         super().__init__(**kwargs)
         self._dm = asdk.Init(serial_number.encode())
         if not self._dm:
@@ -143,7 +142,8 @@ class AlpaoDeformableMirror(microscope.abc.DeformableMirror):
             and tmode != microscope.TriggerMode.ONCE
         ):
             raise microscope.UnsupportedFeatureError(
-                "trigger mode '%s' only supports trigger type ONCE" % tmode.name
+                "trigger mode '%s' only supports trigger type ONCE"
+                % tmode.name
             )
         self._trigger_mode = tmode
 
@@ -194,12 +194,13 @@ class AlpaoDeformableMirror(microscope.abc.DeformableMirror):
         status = asdk.Stop(self._dm)
         self._raise_if_error(status)
 
-        status = asdk.SendPattern(self._dm, data_pointer, n_patterns, n_repeats)
+        status = asdk.SendPattern(
+            self._dm, data_pointer, n_patterns, n_repeats
+        )
         self._raise_if_error(status)
 
-    def __del__(self):
+    def _do_shutdown(self) -> None:
         status = asdk.Release(self._dm)
         if status != asdk.SUCCESS:
             msg = self._find_error_str()
             warnings.warn(msg)
-        super().__del__()

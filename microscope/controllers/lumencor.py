@@ -29,38 +29,13 @@ We only need access to other such devices.
    (not legacy).  This can be changed via the device web interface.
 """
 
-import threading
 import typing
 
 import serial
 
 import microscope
+import microscope._utils
 import microscope.abc
-
-
-# TODO: move this into its own module to be used by others.
-class _SyncSerial:
-    """Wraps a `Serial` instance with a lock for synchronization."""
-
-    def __init__(self, serial: serial.Serial) -> None:
-        self._serial = serial
-        self._lock = threading.RLock()
-
-    @property
-    def lock(self) -> threading.RLock:
-        return self._lock
-
-    def readline(self) -> bytes:
-        with self._lock:
-            return self._serial.readline()
-
-    def readlines(self, hint: int = -1) -> typing.List[bytes]:
-        with self._lock:
-            return self._serial.readlines(hint)
-
-    def write(self, data: bytes) -> int:
-        with self._lock:
-            return self._serial.write(data)
 
 
 class _SpectraIIIConnection:
@@ -69,10 +44,17 @@ class _SpectraIIIConnection:
     This module makes checks for Spectra III light engine and it was
     only tested for it.  But it should work with other lumencor light
     engines with little work though, if only we got access to them.
+
     """
 
-    def __init__(self, serial: _SyncSerial) -> None:
+    def __init__(self, serial: microscope._utils.SharedSerial) -> None:
         self._serial = serial
+        # If the Spectra has just been powered up the first command
+        # will fail with UNKNOWNCMD.  So just send an empty command
+        # and ignore the result.
+        self._serial.write(b"\n")
+        self._serial.readline()
+
         # We use command() and readline() instead of get_command() in
         # case this is not a Lumencor and won't even give a standard
         # answer and raises an exception during the answer validation.
@@ -89,7 +71,10 @@ class _SpectraIIIConnection:
         # GET, SET (to query or to set).  The second token is the
         # command name.
         assert len(TX_tokens) >= 2, "invalid command with less than two tokens"
-        assert TX_tokens[0] in (b"GET", b"SET"), "invalid command (not SET/GET)"
+        assert TX_tokens[0] in (
+            b"GET",
+            b"SET",
+        ), "invalid command (not SET/GET)"
 
         TX_command = b" ".join(TX_tokens) + b"\n"
         with self._serial.lock:
@@ -166,9 +151,9 @@ class SpectraIIILightEngine(microscope.abc.Controller):
     """Spectra III Light Engine.
 
     Args:
-        port (str): port name (Windows) or path to port (everything
-            else) to connect to.  For example, `/dev/ttyS1`, `COM1`,
-            or `/dev/cuad1`.
+        port: port name (Windows) or path to port (everything else) to
+            connect to.  For example, `/dev/ttyS1`, `COM1`, or
+            `/dev/cuad1`.
 
     The names used on the devices dict are the ones provided by the
     Spectra engine.  These are the colour names in capitals such as
@@ -181,6 +166,7 @@ class SpectraIIILightEngine(microscope.abc.Controller):
     are already on, or by turning on additional sources, commands will
     be rejected. To clear the error condition, reduce intensities of
     sources that are on or turn off additional sources.
+
     """
 
     def __init__(self, port: str, **kwargs) -> None:
@@ -199,7 +185,8 @@ class SpectraIIILightEngine(microscope.abc.Controller):
             rtscts=False,
             dsrdtr=False,
         )
-        connection = _SpectraIIIConnection(_SyncSerial(serial_conn))
+        shared_serial = microscope._utils.SharedSerial(serial_conn)
+        connection = _SpectraIIIConnection(shared_serial)
 
         for index, name in connection.get_channel_map():
             assert (
@@ -212,7 +199,10 @@ class SpectraIIILightEngine(microscope.abc.Controller):
         return self._lights
 
 
-class _SpectraIIILightChannel(microscope.abc.LightSource):
+class _SpectraIIILightChannel(
+    microscope._utils.OnlyTriggersBulbOnSoftwareMixin,
+    microscope.abc.LightSource,
+):
     """A single light channel from a light engine.
 
     A channel may be an LED, luminescent light pipe, or a laser.
@@ -227,10 +217,7 @@ class _SpectraIIILightChannel(microscope.abc.LightSource):
         # operations.
         self._max_intensity = float(self._conn.get_max_intensity())
 
-    def initialize(self) -> None:
-        pass
-
-    def _on_shutdown(self) -> None:
+    def _do_shutdown(self) -> None:
         # There is a shutdown command but this actually powers off the
         # device which is not what LightSource.shutdown() is meant to
         # do.  So do nothing.

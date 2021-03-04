@@ -30,7 +30,6 @@ import threading
 import time
 import typing
 from ast import literal_eval
-from collections import OrderedDict
 from enum import EnumMeta
 from threading import Thread
 
@@ -38,6 +37,7 @@ import numpy
 import Pyro4
 
 import microscope
+
 
 _logger = logging.getLogger(__name__)
 
@@ -65,31 +65,49 @@ def _call_if_callable(f):
 
 
 class _Setting:
-    # TODO: refactor into subclasses to avoid if isinstance .. elif .. else.
-    # Settings classes should be private: devices should use a factory method
-    # rather than instantiate settings directly; most already use add_setting
-    # for this.
+    """Create a setting.
+
+    Args:
+        name: the setting's name.
+        dtype: a data type from `"int"`, `"float"`, `"bool"`,
+            `"enum"`, or `"str"` (see `DTYPES`).
+        get_func: a function to get the current value.
+        set_func: a function to set the value.
+        values: a description of allowed values dependent on dtype, or
+            function that returns a description.
+        readonly: an optional function to indicate if the setting is
+            readonly.  A setting may be readonly temporarily, so this
+            function will return `True` or `False` to indicate its
+            current state.  If set to no `None` (default), then its
+            value will be dependent on the value of `set_func`.
+
+    A client needs some way of knowing a setting name and data type,
+    retrieving the current value and, if settable, a way to retrieve
+    allowable values, and set the value.
+
+    Setters and getters accept or return:
+
+    * the setting value for int, float, bool and str;
+    * the setting index into a list, dict or Enum type for enum.
+
+    .. todo::
+
+        refactor into subclasses to avoid if isinstance .. elif
+        .. else.  Settings classes should be private: devices should
+        use a factory method rather than instantiate settings
+        directly; most already use add_setting for this.
+
+    """
+
     def __init__(
-        self, name, dtype, get_func, set_func=None, values=None, readonly=False
-    ):
-        """Create a setting.
-
-        :param name: the setting's name
-        :param dtype: a data type from ('int', 'float', 'bool', 'enum', 'str')
-        :param get_func: a function to get the current value
-        :param set_func: a function to set the value
-        :param values: a description of allowed values dependent on dtype,
-                       or function that returns a description
-        :param readonly: an optional flag to indicate a read-only setting.
-
-        A client needs some way of knowing a setting name and data type,
-        retrieving the current value and, if settable, a way to retrieve
-        allowable values, and set the value.
-
-        Setters and getters accept or return:
-            the setting value for int, float, bool and str;
-            the setting index into a list, dict or Enum type for enum.
-        """
+        self,
+        name: str,
+        dtype: str,
+        get_func: typing.Optional[typing.Callable[[], typing.Any]],
+        set_func: typing.Optional[typing.Callable[[typing.Any], None]] = None,
+        values: typing.Any = None,
+        readonly: typing.Optional[typing.Callable[[], bool]] = None,
+    ) -> None:
         self.name = name
         if dtype not in DTYPES:
             raise ValueError("Unsupported dtype.")
@@ -101,7 +119,6 @@ class _Setting:
         self.dtype = dtype
         self._get = get_func
         self._values = values
-        self._readonly = readonly
         self._last_written = None
         if self._get is not None:
             self._set = set_func
@@ -112,6 +129,19 @@ class _Setting:
                 set_func(value)
 
             self._set = w
+
+        if readonly is None:
+            if self._set is None:
+                self._readonly = lambda: True
+            else:
+                self._readonly = lambda: False
+        else:
+            if self._set is None:
+                raise ValueError(
+                    "`readonly` is not `None` but `set_func` is `None`"
+                )
+            else:
+                self._readonly = readonly
 
     def describe(self):
         return {
@@ -131,10 +161,10 @@ class _Setting:
         else:
             return value
 
-    def readonly(self):
-        return _call_if_callable(self._readonly)
+    def readonly(self) -> bool:
+        return self._readonly()
 
-    def set(self, value):
+    def set(self, value) -> None:
         """Set a setting."""
         if self._set is None:
             raise NotImplementedError()
@@ -162,111 +192,237 @@ class FloatingDeviceMixin(metaclass=abc.ABCMeta):
     """A mixin for devices that 'float'.
 
     Some SDKs handling multiple devices do not allow for explicit
-    selection of a specific device: instead, a device must be
-    initialized and then queried to determine its ID. This class is
-    a mixin which identifies a subclass as floating, and enforces
-    the implementation of a 'get_id' method.
+    selection of a specific device.  Instead, a device must be
+    initialized and then queried to determine its ID. This class is a
+    mixin which identifies a subclass as floating, and enforces the
+    implementation of a `get_id` method.
+
     """
 
     @abc.abstractmethod
-    def get_id(self):
-        """Return a unique hardware identifier, such as a serial number."""
+    def get_id(self) -> str:
+        """Return a unique hardware identifier such as a serial number."""
         pass
+
+
+class TriggerTargetMixin(metaclass=abc.ABCMeta):
+    """Mixin for a device that may be the target of a hardware trigger.
+
+    .. todo::
+
+        Need some way to retrieve the supported trigger types and
+        modes.  This is not just two lists, one for types and another
+        for modes, because some modes can only be used with certain
+        types and vice-versa.
+
+    """
+
+    @property
+    @abc.abstractmethod
+    def trigger_mode(self) -> microscope.TriggerMode:
+        raise NotImplementedError()
+
+    @property
+    @abc.abstractmethod
+    def trigger_type(self) -> microscope.TriggerType:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def set_trigger(
+        self, ttype: microscope.TriggerType, tmode: microscope.TriggerMode
+    ) -> None:
+        """Set device for a specific trigger.
+        """
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def _do_trigger(self) -> None:
+        """Actual trigger of the device.
+
+        Classes implementing this interface should implement this
+        method instead of `trigger`.
+
+        """
+        raise NotImplementedError()
+
+    def trigger(self) -> None:
+        """Trigger device.
+
+        The actual effect is device type dependent.  For example, on a
+        `Camera` it triggers image acquisition while on a
+        `DeformableMirror` it applies a queued pattern.  See
+        documentation for the devices implementing this interface for
+        details.
+
+        Raises:
+            microscope.IncompatibleStateError: if trigger type is not
+                set to `TriggerType.SOFTWARE`.
+
+        """
+        if self.trigger_type is not microscope.TriggerType.SOFTWARE:
+            raise microscope.IncompatibleStateError(
+                "trigger type is not software"
+            )
+        _logger.debug("trigger by software")
+        self._do_trigger()
 
 
 class Device(metaclass=abc.ABCMeta):
     """A base device class. All devices should subclass this class.
 
     Args:
-        index (int): the index of the device on a shared library.
-            This argument is added by the deviceserver.
+        index: the index of the device on a shared library.  This
+            argument is added by the deviceserver.
+
     """
 
-    def __init__(self, index=None):
-        self.enabled = None
-        # A list of settings. (Can't serialize OrderedDict, so use {}.)
-        self._settings = OrderedDict()
+    def __init__(self, index: typing.Optional[int] = None) -> None:
+        self.enabled = False
+        self._settings: typing.Dict[str, _Setting] = {}
         self._index = index
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.shutdown()
 
-    def get_is_enabled(self):
+    def get_is_enabled(self) -> bool:
         return self.enabled
 
-    def _on_disable(self):
+    def _do_disable(self):
         """Do any device-specific work on disable.
 
-        Subclasses should override this method, rather than modify
-        disable(self).
+        Subclasses should override this method rather than modify
+        `disable`.
+
         """
         return True
 
-    def disable(self):
+    def disable(self) -> None:
         """Disable the device for a short period for inactivity."""
-        self._on_disable()
+        self._do_disable()
         self.enabled = False
 
-    def _on_enable(self):
-        """Do any device-specific work on enable.
+    def _do_enable(self):
+        """Do any device specific work on enable.
 
         Subclasses should override this method, rather than modify
-        enable(self).
+        `enable`.
+
         """
         return True
 
-    def enable(self):
+    def enable(self) -> None:
         """Enable the device."""
         try:
-            self.enabled = self._on_enable()
+            self.enabled = self._do_enable()
         except Exception as err:
-            _logger.debug("Error in _on_enable:", exc_info=err)
+            _logger.debug("Error in _do_enable:", exc_info=err)
 
     @abc.abstractmethod
-    def _on_shutdown(self):
-        """Subclasses over-ride this with tasks to do on shutdown."""
+    def _do_shutdown(self) -> None:
+        """Private method - actual shutdown of the device.
+
+        Users should be calling :meth:`shutdown` and not this method.
+        Concrete implementations should implement this method instead
+        of `shutdown`.
+
+        """
+        raise NotImplementedError()
+
+    def initialize(self) -> None:
+        """Initialize the device.
+
+        If devices have this method (not required, and many don't),
+        then they should call it as part of the initialisation, i.e.,
+        they should call it on their `__init__` method.
+
+        """
         pass
 
-    @abc.abstractmethod
-    def initialize(self):
-        """Initialize the device."""
-        pass
+    def shutdown(self) -> None:
+        """Shutdown the device.
 
-    def shutdown(self):
-        """Shutdown the device for a prolonged period of inactivity."""
+        Disable and disconnect the device.  This method should be
+        called before destructing the device object, to ensure that
+        the device is actually shutdown.
+
+        After `shutdown`, the device object is no longer usable and
+        calling any other method is undefined behaviour.  The only
+        exception `shutdown` itself which can be called consecutively,
+        and after the first time will have no effect.
+
+        A device object that has been shutdown can't be reinitialised.
+        Instead of reusing the object, a new one should be created
+        instead.  This means that `shutdown` will leave the device in
+        a state that it can be reconnected.
+
+        .. code-block:: python
+
+            device = SomeDevice()
+            device.shutdown()
+
+            # Multiple calls to shutdown are OK
+            device.shutdown()
+            device.shutdown()
+
+            # After shutdown, everything else is undefined behaviour.
+            device.enable()  # undefined behaviour
+            device.get_setting("speed")  # undefined behaviour
+
+            # To reinitialise the device, construct a new instance.
+            device = SomeDevice()
+
+
+        .. note::
+
+            While `__del__` calls `shutdown`, one should not rely on
+            it.  Python does not guarante that `__del__` will be
+            called when the interpreter exits so if `shutdown` is not
+            called explicitely, the devices might not be shutdown.
+
+        """
         try:
             self.disable()
         except Exception as e:
             _logger.warning("Exception in disable() during shutdown: %s", e)
         _logger.info("Shutting down ... ... ...")
-        self._on_shutdown()
+        self._do_shutdown()
         _logger.info("... ... ... ... shut down completed.")
 
-    def make_safe(self):
-        """Put the device into a safe state."""
-        pass
-
     def add_setting(
-        self, name, dtype, get_func, set_func, values, readonly=False
-    ):
+        self,
+        name,
+        dtype,
+        get_func,
+        set_func,
+        values,
+        readonly: typing.Optional[typing.Callable[[], bool]] = None,
+    ) -> None:
         """Add a setting definition.
 
-        :param name: the setting's name
-        :param dtype: a data type from ('int', 'float', 'bool', 'enum', 'str')
-        :param get_func: a function to get the current value
-        :param set_func: a function to set the value
-        :param values: a description of allowed values dependent on dtype,
-                       or function that returns a description
-        :param readonly: an optional flag to indicate a read-only setting.
+        Args:
+            name: the setting's name.
+            dtype: a data type from `"int"`, `"float"`, `"bool"`,
+                `"enum"`, or `"str"` (see `DTYPES`).
+            get_func: a function to get the current value.
+            set_func: a function to set the value.
+            values: a description of allowed values dependent on
+                dtype, or function that returns a description.
+            readonly: an optional function to indicate if the setting
+                is readonly.  A setting may be readonly temporarily,
+                so this function will return `True` or `False` to
+                indicate its current state.  If set to no `None`
+                (default), then its value will be dependent on the
+                value of `set_func`.
 
-        A client needs some way of knowing a setting name and data type,
-        retrieving the current value and, if settable, a way to retrieve
-        allowable values, and set the value.
-        We store this info in an OrderedDict. I considered having a Setting
-        class with getter, setter, etc., and adding Setting instances as
-        device attributes, but Pyro does not support dot notation to access
-        the functions we need (e.g. Device.some_setting.set ), so I'd have to
-        write access functions, anyway.
+        A client needs some way of knowing a setting name and data
+        type, retrieving the current value and, if settable, a way to
+        retrieve allowable values, and set the value.  We store this
+        info in a dictionary.  I considered having a `Setting1 class
+        with getter, setter, etc., and adding `Setting` instances as
+        device attributes, but Pyro does not support dot notation to
+        access the functions we need (e.g. `Device.some_setting.set`),
+        so I'd have to write access functions, anyway.
+
         """
         if dtype not in DTYPES:
             raise ValueError("Unsupported dtype.")
@@ -280,7 +436,7 @@ class Device(metaclass=abc.ABCMeta):
                 name, dtype, get_func, set_func, values, readonly
             )
 
-    def get_setting(self, name):
+    def get_setting(self, name: str):
         """Return the current value of a setting."""
         try:
             return self._settings[name].get()
@@ -301,7 +457,7 @@ class Device(metaclass=abc.ABCMeta):
 
         return {k: catch(v.get) for k, v in self._settings.items()}
 
-    def set_setting(self, name, value):
+    def set_setting(self, name: str, value) -> None:
         """Set a setting."""
         try:
             self._settings[name].set(value)
@@ -309,7 +465,7 @@ class Device(metaclass=abc.ABCMeta):
             _logger.error("in set_setting(%s):", name, exc_info=err)
             raise
 
-    def describe_setting(self, name):
+    def describe_setting(self, name: str):
         """Return ordered setting descriptions as a list of dicts."""
         return self._settings[name].describe()
 
@@ -317,7 +473,7 @@ class Device(metaclass=abc.ABCMeta):
         """Return ordered setting descriptions as a list of dicts."""
         return [(k, v.describe()) for (k, v) in self._settings.items()]
 
-    def update_settings(self, incoming, init=False):
+    def update_settings(self, incoming, init: bool = False):
         """Update settings based on dict of settings and values."""
         if init:
             # Assume nothing about state: set everything.
@@ -348,7 +504,7 @@ class Device(metaclass=abc.ABCMeta):
                 results[key] = NotImplemented
                 update_keys.remove(key)
                 continue
-            if _call_if_callable(self._settings[key].readonly):
+            if self._settings[key].readonly():
                 continue
             self._settings[key].set(incoming[key])
         # Read back values in second loop.
@@ -364,7 +520,7 @@ def keep_acquiring(func):
         if self._acquiring:
             self.abort()
             result = func(self, *args, **kwargs)
-            self._on_enable()
+            self._do_enable()
         else:
             result = func(self, *args, **kwargs)
         return result
@@ -380,15 +536,18 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
     receiveClient(uri).
 
     Derived classed should implement::
-      * abort(self)                ---  required
-      * _fetch_data(self)          ---  required
-      * _process_data(self, data)  ---  optional
 
-    Derived classes may override __init__, enable and disable, but must
-    ensure to call this class's implementations as indicated in the docstrings.
+    * :meth:`abort` (required)
+    * :meth:`_fetch_data` (required)
+    * :meth:`_process_data` (optional)
+
+    Derived classes may override `__init__`, `enable` and `disable`,
+    but must ensure to call this class's implementations as indicated
+    in the docstrings.
+
     """
 
-    def __init__(self, buffer_length=0, **kwargs):
+    def __init__(self, buffer_length: int = 0, **kwargs) -> None:
         """Derived.__init__ must call this at some point."""
         super().__init__(**kwargs)
         # A thread to fetch and dispatch data.
@@ -418,22 +577,23 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
     set_setting = keep_acquiring(Device.set_setting)
 
     @abc.abstractmethod
-    def abort(self):
+    def abort(self) -> None:
         """Stop acquisition as soon as possible."""
         self._acquiring = False
 
-    def enable(self):
+    def enable(self) -> None:
         """Enable the data capture device.
 
-        Ensures that a data handling threads are running.
-        Implement device-specific code in _on_enable .
+        Ensures that a data handling threads are running.  Implement
+        device specific code in `_do_enable`.
+
         """
         _logger.debug("Enabling ...")
         # Call device-specific code.
         try:
-            result = self._on_enable()
+            result = self._do_enable()
         except Exception as err:
-            _logger.debug("Error in _on_enable:", exc_info=err)
+            _logger.debug("Error in _do_enable:", exc_info=err)
             self.enabled = False
             raise err
         if not result:
@@ -457,12 +617,13 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
                 self._dispatch_thread.daemon = True
                 self._dispatch_thread.start()
             _logger.debug("... enabled.")
-        return self.enabled
 
-    def disable(self):
+    def disable(self) -> None:
         """Disable the data capture device.
 
-        Implement device-specific code in _on_disable ."""
+        Implement device-specific code in `_do_disable`.
+
+        """
         self.enabled = False
         if self._fetch_thread:
             if self._fetch_thread.is_alive():
@@ -471,15 +632,16 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
         super().disable()
 
     @abc.abstractmethod
-    def _fetch_data(self):
+    def _fetch_data(self) -> None:
         """Poll for data and return it, with minimal processing.
 
-        If the device uses buffering in software, this function should copy
-        the data from the buffer, release or recycle the buffer, then return
-        a reference to the copy. Otherwise, if the SDK returns a data object
-        that will not be written to again, this function can just return a
-        reference to the object.
-        If no data is available, return None.
+        If the device uses buffering in software, this function should
+        copy the data from the buffer, release or recycle the buffer,
+        then return a reference to the copy.  Otherwise, if the SDK
+        returns a data object that will not be written to again, this
+        function can just return a reference to the object.  If no
+        data is available, return `None`.
+
         """
         return None
 
@@ -490,10 +652,16 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
     def _send_data(self, client, data, timestamp):
         """Dispatch data to the client."""
         try:
-            # Currently uses legacy receiveData. Would like to pass
-            # this function name as an argument to set_client, but
-            # not sure how to subsequently resolve this over Pyro.
-            client.receiveData(data, timestamp)
+            # Cockpit will send a client with receiveData and expects
+            # two arguments (data and timestamp).  But we really want
+            # to use Python's Queue and instead of just the timestamp
+            # we should be sending some proper metadata object.  We
+            # don't have that proper metadata class yet so just send
+            # the image data as a numpy ndarray for now.
+            if hasattr(client, "put"):
+                client.put(data)
+            else:
+                client.receiveData(data, timestamp)
         except (
             Pyro4.errors.ConnectionClosedError,
             Pyro4.errors.CommunicationError,
@@ -505,7 +673,7 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
             self._clientStack = list(filter(client.__ne__, self._clientStack))
             self._liveClients = self._liveClients.difference([client])
 
-    def _dispatch_loop(self):
+    def _dispatch_loop(self) -> None:
         """Process data and send results to any client."""
         while True:
             client, data, timestamp = self._dispatch_buffer.get(block=True)
@@ -520,7 +688,9 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
                     err = e
             else:
                 try:
-                    self._send_data(client, self._process_data(data), timestamp)
+                    self._send_data(
+                        client, self._process_data(data), timestamp
+                    )
                 except Exception as e:
                     err = e
             if err:
@@ -529,7 +699,7 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
                 _logger.error("in _dispatch_loop:", exc_info=err)
             self._dispatch_buffer.task_done()
 
-    def _fetch_loop(self):
+    def _fetch_loop(self) -> None:
         """Poll source for data and put it into dispatch buffer."""
         self._fetch_thread_run = True
 
@@ -564,11 +734,11 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
             self._clientStack.append(val)
         self._liveClients = set(self._clientStack)
 
-    def _put(self, data, timestamp):
+    def _put(self, data, timestamp) -> None:
         """Put data and timestamp into dispatch buffer with target dispatch client."""
         self._dispatch_buffer.put((self._client, data, timestamp))
 
-    def set_client(self, new_client):
+    def set_client(self, new_client) -> None:
         """Set up a connection to our client.
 
         Clients now sit in a stack so that a single device may send
@@ -583,6 +753,7 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
         the current client is finished.  Avoiding this will require
         rework here to identify the caller and remove only that caller
         from the client stack.
+
         """
         if new_client is not None:
             if isinstance(new_client, (str, Pyro4.core.URI)):
@@ -598,20 +769,22 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
             _logger.info("Current client is %s.", str(self._client))
 
     @keep_acquiring
-    def update_settings(self, settings, init=False):
+    def update_settings(self, settings, init: bool = False) -> None:
         """Update settings, toggling acquisition if necessary."""
         super().update_settings(settings, init)
 
     # noinspection PyPep8Naming
-    def receiveClient(self, client_uri):
+    def receiveClient(self, client_uri: str) -> None:
         """A passthrough for compatibility."""
         self.set_client(client_uri)
 
-    def grab_next_data(self, soft_trigger=True):
+    def grab_next_data(self, soft_trigger: bool = True):
         """Returns results from next trigger via a direct call.
 
-        :param soft_trigger: calls soft_trigger if True,
-                               waits for hardware trigger if False.
+        Args:
+            soft_trigger: calls :meth:`trigger` if `True`, waits for
+                hardware trigger if `False`.
+
         """
         if not self.enabled:
             raise microscope.DisabledDeviceError("Camera not enabled.")
@@ -620,7 +793,7 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
         self.set_client(self)
         # Wait for data from next trigger.
         if soft_trigger:
-            self.soft_trigger()
+            self.trigger()
         self._new_data_condition.wait()
         # Pop self from client stack
         self.set_client(None)
@@ -628,23 +801,24 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
         return self._new_data
 
     # noinspection PyPep8Naming
-    def receiveData(self, data, timestamp):
+    def receiveData(self, data, timestamp) -> None:
         """Unblocks grab_next_frame so it can return."""
         with self._new_data_condition:
             self._new_data = (data, timestamp)
             self._new_data_condition.notify()
 
 
-class Camera(DataDevice):
-    """Adds functionality to DataDevice to support cameras.
+class Camera(TriggerTargetMixin, DataDevice):
+    """Adds functionality to :class:`DataDevice` to support cameras.
 
-    Defines the interface for cameras.
-    Applies a transform to acquired data in the processing step.
+    Defines the interface for cameras.  Applies a transform to
+    acquired data in the processing step.
+
     """
 
     ALLOWED_TRANSFORMS = [p for p in itertools.product(*3 * [[False, True]])]
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         # A list of readout mode descriptions.
         self._readout_modes = ["default"]
@@ -718,32 +892,25 @@ class Camera(DataDevice):
         self.set_transform(self._client_transform)
 
     @abc.abstractmethod
-    def set_exposure_time(self, value):
-        """Set the exposure time on the device.
-
-        :param value: exposure time in seconds
-        """
+    def set_exposure_time(self, value: float) -> None:
+        """Set the exposure time on the device in seconds."""
         pass
 
-    def get_exposure_time(self):
-        """Return the current exposure time, in seconds."""
+    def get_exposure_time(self) -> float:
+        """Return the current exposure time in seconds."""
         pass
 
-    def get_cycle_time(self):
-        """Return the cycle time, in seconds."""
-        pass
-
-    def get_sensor_temperature(self):
-        """Return the sensor temperature."""
+    def get_cycle_time(self) -> float:
+        """Return the cycle time in seconds."""
         pass
 
     @abc.abstractmethod
-    def _get_sensor_shape(self):
-        """Return a tuple of (width, height) indicating shape in pixels."""
+    def _get_sensor_shape(self) -> typing.Tuple[int, int]:
+        """Return a tuple of `(width, height)` indicating shape in pixels."""
         pass
 
-    def get_sensor_shape(self):
-        """Return a tuple of (width, height), corrected for transform."""
+    def get_sensor_shape(self) -> typing.Tuple[int, int]:
+        """Return a tuple of `(width, height)` corrected for transform."""
         shape = self._get_sensor_shape()
         if self._transform[2]:
             # 90 degree rotation
@@ -751,25 +918,25 @@ class Camera(DataDevice):
         return shape
 
     @abc.abstractmethod
-    def _get_binning(self):
-        """Return a tuple of (horizontal, vertical)"""
+    def _get_binning(self) -> microscope.Binning:
+        """Return the current binning."""
         pass
 
-    def get_binning(self):
-        """Return a tuple of (horizontal, vertical) corrected for transform."""
+    def get_binning(self) -> microscope.Binning:
+        """Return the current binning corrected for transform."""
         binning = self._get_binning()
         if self._transform[2]:
             # 90 degree rotation
-            binning = (binning[1], binning[0])
+            binning = microscope.Binning(binning[1], binning[0])
         return binning
 
     @abc.abstractmethod
-    def _set_binning(self, binning):
-        """Set binning along both axes. Return True if successful."""
+    def _set_binning(self, binning: microscope.Binning):
+        """Set binning along both axes.  Return `True` if successful."""
         pass
 
-    def set_binning(self, binning):
-        """Set binning along both axes. Return True if successful."""
+    def set_binning(self, binning: microscope.Binning) -> None:
+        """Set binning along both axes.  Return `True` if successful."""
         h_bin, v_bin = binning
         if self._transform[2]:
             # 90 degree rotation
@@ -779,15 +946,12 @@ class Camera(DataDevice):
         return self._set_binning(binning)
 
     @abc.abstractmethod
-    def _get_roi(self):
+    def _get_roi(self) -> microscope.ROI:
         """Return the ROI as it is on hardware."""
         raise NotImplementedError()
 
-    def get_roi(self):
-        """Return ROI as a rectangle (left, top, width, height).
-
-        Chosen this rectangle format as it completely defines the ROI without
-        reference to the sensor geometry."""
+    def get_roi(self) -> microscope.ROI:
+        """Return current ROI. """
         roi = self._get_roi()
         if self._transform[2]:
             # 90 degree rotation
@@ -795,14 +959,15 @@ class Camera(DataDevice):
         return roi
 
     @abc.abstractmethod
-    def _set_roi(self, roi):
-        """Set the ROI on the hardware, return True if successful."""
+    def _set_roi(self, roi: microscope.ROI):
+        """Set the ROI on the hardware.  Return `True` if successful."""
         return False
 
-    def set_roi(self, roi):
+    def set_roi(self, roi: microscope.ROI) -> None:
         """Set the ROI according to the provided rectangle.
-        ROI is a tuple (left, right, width, height)
-        Return True if ROI set correctly, False otherwise."""
+
+        Return True if ROI set correctly, False otherwise.
+        """
         maxw, maxh = self.get_sensor_shape()
         binning = self.get_binning()
         left, top, width, height = roi
@@ -826,84 +991,19 @@ class Camera(DataDevice):
         """
         pass
 
-    def get_meta_data(self):
-        """Return metadata."""
-        pass
-
-    def soft_trigger(self):
-        """Optional software trigger - implement if available."""
-        pass
-
-
-class TriggerTargetMixin(metaclass=abc.ABCMeta):
-    """Mixin for a device that may be the target of a hardware trigger.
-
-    TODO: need some way to retrieve the supported trigger types and
-        modes.  This is not just two lists, one for types and another
-        for modes, because some modes can only be used with certain
-        types and vice-versa.
-
-    """
-
-    @property
-    @abc.abstractmethod
-    def trigger_mode(self) -> microscope.TriggerMode:
-        raise NotImplementedError()
-
-    @property
-    @abc.abstractmethod
-    def trigger_type(self) -> microscope.TriggerType:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def set_trigger(
-        self, ttype: microscope.TriggerType, tmode: microscope.TriggerMode
-    ) -> None:
-        """Set device for a specific trigger.
-        """
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def _do_trigger(self) -> None:
-        """Actual trigger of the device.
-
-        Classes implementing this interface should implement this
-        method instead of `trigger`.
-
-        """
-        raise NotImplementedError()
-
-    def trigger(self) -> None:
-        """Trigger device.
-
-        The actual effect is device type dependent.  For example, on a
-        `Camera` it triggers image acquisition while on a
-        `DeformableMirror` it applies a queued pattern.  See
-        documentation for the devices implementing this interface for
-        details.
-
-        Raises:
-            microscope.IncompatibleStateError: if trigger type is not
-                set to `TriggerType.SOFTWARE`.
-
-        """
-        if self.trigger_type is not microscope.TriggerType.SOFTWARE:
-            raise microscope.IncompatibleStateError(
-                "trigger type is not software"
-            )
-        _logger.debug("trigger by software")
-        self._do_trigger()
-
 
 class SerialDeviceMixin(metaclass=abc.ABCMeta):
     """Mixin for devices that are controlled via serial.
+
+    DEPRECATED: turns out that this was a bad idea.  A device that has
+      a serial connection is not a serial connection.  The "has a" and
+      the not "is a" should have told us that we should have been
+      using composition instead of subclassing, but there you go.
 
     Currently handles the flushing and locking of the comms channel
     until a command has finished, and the passthrough to the serial
     channel.
 
-    TODO: add more logic to handle the code duplication of serial
-    devices.
     """
 
     def __init__(self, **kwargs):
@@ -915,12 +1015,12 @@ class SerialDeviceMixin(metaclass=abc.ABCMeta):
         self.connection = None  # serial.Serial (to be constructed by child)
         self._comms_lock = threading.RLock()
 
-    def _readline(self):
+    def _readline(self) -> bytes:
         """Read a line from connection without leading and trailing whitespace.
         """
         return self.connection.readline().strip()
 
-    def _write(self, command):
+    def _write(self, command: bytes) -> int:
         """Send a command to the device.
 
         This is not a simple passthrough to ``serial.Serial.write``,
@@ -928,11 +1028,6 @@ class SerialDeviceMixin(metaclass=abc.ABCMeta):
         if a device requires a specific format.
         """
         return self.connection.write(command + b"\r\n")
-
-    @abc.abstractmethod
-    def is_alive(self):
-        """Query if device is alive and we can send messages."""
-        pass
 
     @staticmethod
     def lock_comms(func):
@@ -944,6 +1039,7 @@ class SerialDeviceMixin(metaclass=abc.ABCMeta):
         and subsequent readline.  It also locks the comms channel so
         that a function must finish all its communications before
         another can run.
+
         """
 
         @functools.wraps(func)
@@ -972,18 +1068,16 @@ class DeformableMirror(TriggerTargetMixin, Device, metaclass=abc.ABCMeta):
     set the mirror to an initial state and not a specific shape, then
     destroying and re-constructing the DeformableMirror object
     provides the most obvious solution.
+
+    The private properties `_patterns` and `_pattern_idx` are
+    initialized to `None` to support the queueing of patterns and
+    software triggering.
+
     """
 
     @abc.abstractmethod
     def __init__(self, **kwargs) -> None:
-        """Constructor.
-
-        The private properties `_patterns` and `_pattern_idx` are
-        initialized to `None` to support the queueing of patterns and
-        software triggering.
-        """
         super().__init__(**kwargs)
-
         self._patterns: typing.Optional[numpy.ndarray] = None
         self._pattern_idx: int = -1
 
@@ -1000,6 +1094,7 @@ class DeformableMirror(TriggerTargetMixin, Device, metaclass=abc.ABCMeta):
         to handle values outside their defined range (most will simply
         clip them), then it's the responsability of the subclass to do
         the clipping before sending the values.
+
         """
         if patterns.ndim > 2:
             raise ValueError(
@@ -1023,7 +1118,7 @@ class DeformableMirror(TriggerTargetMixin, Device, metaclass=abc.ABCMeta):
 
         Raises:
             microscope.IncompatibleStateError: if device trigger type is
-            not set to software.
+                not set to software.
 
         """
         if self.trigger_type is not microscope.TriggerType.SOFTWARE:
@@ -1040,15 +1135,14 @@ class DeformableMirror(TriggerTargetMixin, Device, metaclass=abc.ABCMeta):
     def queue_patterns(self, patterns: numpy.ndarray) -> None:
         """Send values to the mirror.
 
-        Parameters
-        ----------
-        patterns : numpy.array
-            An KxN elements array of values in the range [0 1], where N
-            equals the number of actuators, and K is the number of
-            patterns.
+        Args:
+            patterns: An `KxN` elements array of values in the range
+                `[0 1]`, where `N` equals the number of actuators, and
+                `K` is the number of patterns.
 
         A convenience fallback is provided for software triggering is
         provided.
+
         """
         self._validate_patterns(patterns)
         self._patterns = patterns
@@ -1058,14 +1152,9 @@ class DeformableMirror(TriggerTargetMixin, Device, metaclass=abc.ABCMeta):
         """Apply the next pattern in the queue.
 
         DEPRECATED: this is the same as calling :meth:`trigger`.
+
         """
         self.trigger()
-
-    def initialize(self) -> None:
-        pass
-
-    def _on_shutdown(self) -> None:
-        pass
 
     def _do_trigger(self) -> None:
         """Convenience fallback.
@@ -1078,8 +1167,11 @@ class DeformableMirror(TriggerTargetMixin, Device, metaclass=abc.ABCMeta):
         Devices that support queuing patterns, should override this
         method.
 
-        .. todo:: instead of a convenience fallback, we should have a
-           separate mixin for this.
+        .. todo::
+
+            Instead of a convenience fallback, we should have a
+            separate mixin for this.
+
         """
         if self._patterns is None:
             raise microscope.DeviceError("no pattern queued to apply")
@@ -1093,21 +1185,34 @@ class DeformableMirror(TriggerTargetMixin, Device, metaclass=abc.ABCMeta):
         return super().trigger()
 
 
-class LightSource(Device, metaclass=abc.ABCMeta):
+class LightSource(TriggerTargetMixin, Device, metaclass=abc.ABCMeta):
+    """Light source such as lasers or LEDs.
+
+    Light sources often, possibly always, only support the
+    `TriggerMode.BULB`.  In this context, the trigger type changes
+    what happens when `enable` is called.  `TriggerType.SOFTWARE`
+    means that `enable` will make the device emit light immediately,
+    and disable will make the device stop emit light.
+
+    `TriggerType.HIGH` or `TriggerType.LOW` means that `enable` will
+    set and unset the laser such that it only emits light while
+    receiving a high or low TTL, or digital, input signal.
+
+    """
+
     @abc.abstractmethod
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._set_point = 0.0
 
     @abc.abstractmethod
-    def get_status(self):
+    def get_status(self) -> typing.List[str]:
         """Query and return the light source status."""
         result = []
-        # ...
         return result
 
     @abc.abstractmethod
-    def get_is_on(self):
+    def get_is_on(self) -> bool:
         """Return True if the light source is currently able to produce light."""
         pass
 
@@ -1122,6 +1227,7 @@ class LightSource(Device, metaclass=abc.ABCMeta):
 
         This function will be called by the `power` attribute setter
         after clipping the argument to the [0, 1] interval.
+
         """
         raise NotImplementedError()
 
@@ -1146,6 +1252,18 @@ class LightSource(Device, metaclass=abc.ABCMeta):
 
 
 class FilterWheel(Device, metaclass=abc.ABCMeta):
+    """ABC for filter wheels, cube turrets, and filter sliders.
+
+    FilterWheel devices are devices that have specific positions to
+    hold different filters.  Implementations will enable the change to
+    any of those positions, including positions that may not hold a
+    filter.
+
+    Args:
+        positions: total number of filter positions on this device.
+
+    """
+
     def __init__(self, positions: int, **kwargs) -> None:
         super().__init__(**kwargs)
         if positions < 1:
@@ -1194,6 +1312,7 @@ class FilterWheel(Device, metaclass=abc.ABCMeta):
 
     # Deprecated and kept for backwards compatibility.
     def get_num_positions(self) -> int:
+        """Deprecated, use the `n_positions` property."""
         return self.n_positions
 
     def get_position(self) -> int:
@@ -1213,19 +1332,13 @@ class Controller(Device, metaclass=abc.ABCMeta):
     Each of the controlled devices requires a name.  The choice of
     name and its documentation is left to the concrete class.
 
-    Initialising and shutting down a controller device must initialise
-    and shutdown the controlled devices.  Concrete classes should be
-    careful to prevent that the shutdown of a controlled device does
-    not shutdown the controller and the other controlled devices.
-    This might require that controlled devices do nothing as part of
-    their shutdown and initialisation.
+    Shutting down a controller device must shutdown the controlled
+    devices.  Concrete classes should be careful to prevent that the
+    shutdown of a controlled device does not shutdown the controller
+    and the other controlled devices.  This might require that
+    controlled devices do nothing as part of their shutdown.
 
     """
-
-    def initialize(self) -> None:
-        super().initialize()
-        for d in self.devices.values():
-            d.initialize()
 
     @property
     @abc.abstractmethod
@@ -1233,10 +1346,9 @@ class Controller(Device, metaclass=abc.ABCMeta):
         """Map of names to the controlled devices."""
         raise NotImplementedError()
 
-    def _on_shutdown(self) -> None:
+    def _do_shutdown(self) -> None:
         for d in self.devices.values():
             d.shutdown()
-        super()._on_shutdown()
 
 
 class StageAxis(metaclass=abc.ABCMeta):
@@ -1287,7 +1399,6 @@ class Stage(Device, metaclass=abc.ABCMeta):
     .. code-block:: python
 
         stage = SomeStageDevice()
-        stage.initialize()
         stage.enable() # may trigger a stage move
 
         # move operations
@@ -1340,7 +1451,6 @@ class Stage(Device, metaclass=abc.ABCMeta):
     Some stages need to find a reference position, home, before being
     able to be moved.  If required, this happens automatically during
     :func:`enable`.
-
     """
 
     @property
@@ -1358,7 +1468,6 @@ class Stage(Device, metaclass=abc.ABCMeta):
         given a stage with optional axes the missing axes will *not*
         appear on the returned dict with a value of `None` or some
         other special `StageAxis` instance.
-
         """
         raise NotImplementedError()
 
@@ -1374,7 +1483,6 @@ class Stage(Device, metaclass=abc.ABCMeta):
         The units of the position is the same as the ones being
         currently used for the absolute move (:func:`move_to`)
         operations.
-
         """
         return {name: axis.position for name, axis in self.axes.items()}
 

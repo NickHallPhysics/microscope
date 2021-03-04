@@ -47,6 +47,7 @@ from enum import Enum, IntEnum
 import microscope
 import microscope.abc
 
+
 _max_version_length = 20
 
 # Typedefs from C headers
@@ -1085,10 +1086,7 @@ class _LinkamBase(microscope.abc.FloatingDeviceMixin, microscope.abc.Device):
                 raise microscope.LibraryLoadError(e) from e
         self._reconnect_thread = None
 
-    def initialize(self):
-        pass
-
-    def _on_shutdown(self):
+    def _do_shutdown(self) -> None:
         pass
 
     def __del__(self):
@@ -1134,6 +1132,7 @@ class _LinkamBase(microscope.abc.FloatingDeviceMixin, microscope.abc.Device):
     def get_value(self, svt, result=None):
         """Fetch a value from the device.
 
+        Args:
             svt: a StageValueType
             result: an existing Variant to use to return a result, or None.
         """
@@ -1184,8 +1183,12 @@ class _LinkamBase(microscope.abc.FloatingDeviceMixin, microscope.abc.Device):
         stopped flags appear to be more reliable than the MDSStatus MoveDone
         flags."""
         if axis is not None and axis.upper() in "XYZ":
-            has_motor = getattr(self._stageconfig.flags, "motor" + axis.upper())
-            stopped = getattr(self._status.flags, "motorStopped" + axis.upper())
+            has_motor = getattr(
+                self._stageconfig.flags, "motor" + axis.upper()
+            )
+            stopped = getattr(
+                self._status.flags, "motorStopped" + axis.upper()
+            )
             return has_motor and not stopped
         else:
             return any(self.is_moving(ax) for ax in "XYZ")
@@ -1494,7 +1497,9 @@ class LinkamCMS(_LinkamMDSMixin, _LinkamBase):
         for axis in "XYZ":
             if getattr(self._stageconfig.flags, "motor" + axis):
                 res[axis] = (
-                    self.get_value(getattr(_StageValueType, "MotorPos" + axis)),
+                    self.get_value(
+                        getattr(_StageValueType, "MotorPos" + axis)
+                    ),
                     self.get_value(
                         getattr(_StageValueType, "MotorSetpoint" + axis)
                     ),

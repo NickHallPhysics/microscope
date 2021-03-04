@@ -48,6 +48,7 @@ import typing
 import serial
 
 import microscope
+import microscope._utils
 import microscope.abc
 
 
@@ -114,6 +115,8 @@ class _ZaberConnection:
     This class is just the wrap to :class:`serial.Serial`.  The class
     exposing the Zaber commands interface is
     :class:`_ZaberDeviceConnection`.
+
+    .. todo: replace with microscope._utils.SharedSerial
     """
 
     def __init__(self, port: str, baudrate: int, timeout: float) -> None:
@@ -332,13 +335,10 @@ class _ZaberStage(microscope.abc.Stage):
             for i in range(1, self._dev_conn.get_number_axes() + 1)
         }
 
-    def initialize(self) -> None:
-        super().initialize()
+    def _do_shutdown(self) -> None:
+        pass
 
-    def _on_shutdown(self) -> None:
-        super()._on_shutdown()
-
-    def _on_enable(self) -> bool:
+    def _do_enable(self) -> bool:
         # Before a device can moved, it first needs to establish a
         # reference to the home position.  We won't be able to move
         # unless we home it first.
@@ -397,11 +397,8 @@ class _ZaberFilterWheel(microscope.abc.FilterWheel):
         if not self._dev_conn.been_homed():
             self._dev_conn.home()
 
-    def initialize(self) -> None:
-        super().initialize()
-
-    def _on_shutdown(self) -> None:
-        super()._on_shutdown()
+    def _do_shutdown(self) -> None:
+        pass
 
     def _do_get_position(self) -> int:
         if self._dev_conn.is_busy():
@@ -416,7 +413,10 @@ class _ZaberFilterWheel(microscope.abc.FilterWheel):
         self._dev_conn.wait_until_idle()
 
 
-class _ZaberLED(microscope.abc.LightSource):
+class _ZaberLED(
+    microscope._utils.OnlyTriggersBulbOnSoftwareMixin,
+    microscope.abc.LightSource,
+):
     """A single LED from a LED controller."""
 
     def __init__(self, dev_conn: _ZaberDeviceConnection, channel: int) -> None:
@@ -430,7 +430,6 @@ class _ZaberLED(microscope.abc.LightSource):
             lambda: self._dev_conn.get_lamp_temperature(self._channel),
             None,
             values=tuple(),
-            readonly=True,
         )
 
         for our_name, their_name in [
@@ -442,28 +441,20 @@ class _ZaberLED(microscope.abc.LightSource):
             )
             value = float(reply.response)
             self.add_setting(
-                our_name,
-                "float",
-                lambda x=value: x,
-                None,
-                values=tuple(),
-                readonly=True,
+                our_name, "float", lambda x=value: x, None, values=tuple(),
             )
 
-    def initialize(self) -> None:
-        pass
-
-    def _on_shutdown(self) -> None:
+    def _do_shutdown(self) -> None:
         pass
 
     def get_status(self) -> typing.List[str]:
         return super().get_status()
 
-    def _on_enable(self) -> bool:
+    def _do_enable(self) -> bool:
         self._dev_conn.lamp_on(self._channel)
         return True
 
-    def _on_disable(self) -> None:
+    def _do_disable(self) -> None:
         self._dev_conn.lamp_off(self._channel)
 
     def _do_get_power(self) -> float:
@@ -553,7 +544,6 @@ class ZaberDaisyChain(microscope.abc.Controller):
                                 {2: ZaberDeviceType.STAGE,
                                  3: ZaberDeviceType.LED_CONTROLLER,
                                  4: ZaberDeviceType.FILTER_WHEEL})
-        zaber.initialize()
 
         # Device names are strings, not int.
         filterwheel = zaber.devices['4']

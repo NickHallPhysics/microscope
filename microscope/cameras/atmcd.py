@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+## Copyright (C) 2009 David Baddeley <d.baddeley@auckland.ac.nz>
 ## Copyright (C) 2020 Mick Phillips <mick.phillips@gmail.com>
 ##
 ## This file is part of Microscope.
@@ -17,17 +18,20 @@
 ## You should have received a copy of the GNU General Public License
 ## along with Microscope.  If not, see <http://www.gnu.org/licenses/>.
 
-"""atmcd
+## The implementation of dllFunc is based on the implementation in
+## PYME, hence copyright to David Baddeley.
 
-   This module wraps Andor's SDK for (EM)CCD cameras.
+"""This module wraps Andor's SDK for (EM)CCD cameras.
 
-   Example deviceserver entry:
+Example deviceserver entry::
+
     from microscope.cameras import atmcd
     DEVICES = [ ...
-               device(atmcd.AndorAtmcd, '127.0.0.1', 8000, uid='VSC-01234')
-              ]
+        device(atmcd.AndorAtmcd, "127.0.0.1", 8000, uid="VSC-01234")
+    ]
 
-   Tested against Ixon Ultra with atmcd64d.dll ver 2.97.30007.0 .
+Tested against Ixon Ultra with atmcd64d.dll ver 2.97.30007.0.
+
 """
 
 import ctypes
@@ -61,6 +65,7 @@ from numpy.ctypeslib import ndpointer
 
 import microscope
 import microscope.abc
+
 
 _logger = logging.getLogger(__name__)
 
@@ -794,7 +799,9 @@ dllFunc("GetBaselineClamp", [OUTPUT(c_int)], ["state"])
 dllFunc("GetBitDepth", [c_int, OUTPUT(c_int)], ["channel", "depth"])
 dllFunc("GetCameraEventStatus", [OUTPUT(DWORD)], ["camStatus"])
 dllFunc(
-    "GetCameraHandle", [c_long, OUTPUT(c_long)], ["cameraIndex", "cameraHandle"]
+    "GetCameraHandle",
+    [c_long, OUTPUT(c_long)],
+    ["cameraIndex", "cameraHandle"],
 )
 dllFunc(
     "GetCameraInformation", [c_int, OUTPUT(c_long)], ["index", "information"]
@@ -877,7 +884,14 @@ dllFunc("GetImageFlip", [OUTPUT(c_int), OUTPUT(c_int)], ["iHFlip", "iVFlip"])
 dllFunc("GetImageRotate", [OUTPUT(c_int)], ["Rotate"])
 dllFunc(
     "GetImages",
-    [c_long, c_long, OUTARR(at_32), OUTARRSIZE, OUTPUT(c_long), OUTPUT(c_long)],
+    [
+        c_long,
+        c_long,
+        OUTARR(at_32),
+        OUTARRSIZE,
+        OUTPUT(c_long),
+        OUTPUT(c_long),
+    ],
     ["first", "last", "arr", "size", "validfirst", "validlast"],
 )
 dllFunc(
@@ -937,7 +951,9 @@ dllFunc(
 dllFunc(
     "GetNumberNewImages", [OUTPUT(c_long), OUTPUT(c_long)], ["first", "last"]
 )
-dllFunc("GetNumberPhotonCountingDivisions", [OUTPUT(at_u32)], ["noOfDivisions"])
+dllFunc(
+    "GetNumberPhotonCountingDivisions", [OUTPUT(at_u32)], ["noOfDivisions"]
+)
 dllFunc("GetNumberPreAmpGains", [OUTPUT(c_int)], ["noGains"])
 dllFunc("GetNumberRingExposureTimes", [OUTPUT(c_int)], ["ipnumTimes"])
 dllFunc("GetNumberIO", [OUTPUT(c_int)], ["iNumber"])
@@ -1327,8 +1343,28 @@ class ReadoutMode:
 _dll_lock = Lock()
 
 
-class AndorAtmcd(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
-    """ Implements CameraDevice interface for Andor ATMCD library."""
+ATMCD_MODE_TO_TRIGGER = {
+    TriggerMode.EXTERNAL: (
+        microscope.TriggerType.RISING_EDGE,
+        microscope.TriggerMode.ONCE,
+    ),
+    TriggerMode.BULB: (
+        microscope.TriggerType.RISING_EDGE,
+        microscope.TriggerMode.BULB,
+    ),
+    TriggerMode.SOFTWARE: (
+        microscope.TriggerType.SOFTWARE,
+        microscope.TriggerMode.ONCE,
+    ),
+}
+
+TRIGGER_TO_ATMCD_MODE = {v: k for k, v in ATMCD_MODE_TO_TRIGGER.items()}
+
+
+class AndorAtmcd(
+    microscope.abc.FloatingDeviceMixin, microscope.abc.Camera,
+):
+    """Implements CameraDevice interface for Andor ATMCD library."""
 
     def __init__(self, index=0, **kwargs):
         super().__init__(index=index, **kwargs)
@@ -1339,6 +1375,7 @@ class AndorAtmcd(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
         # The following parameters will be populated after hardware init.
         self._roi = None
         self._binning = None
+        self.initialize()
 
     def _bind(self, fn):
         """Binds unbound SDK functions to this camera."""
@@ -1430,7 +1467,8 @@ class AndorAtmcd(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
             if GetNumberAmp() > 1:
                 if self._caps.ulCameraType == AC_CAMERATYPE_CLARA:
                     self.amplifiers = IntEnum(
-                        "Amplifiers", (("CONVENTIONAL", 0), ("EXTENDED_NIR", 1))
+                        "Amplifiers",
+                        (("CONVENTIONAL", 0), ("EXTENDED_NIR", 1)),
                     )
                 else:
                     self.amplifiers = IntEnum(
@@ -1481,9 +1519,7 @@ class AndorAtmcd(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
             setter = self._bind(SetMCPGain)
             vrange = self._bind(GetMCPGainRange)
         if getter or setter:
-            self.add_setting(
-                name, "int", getter, setter, vrange, setter is None
-            )
+            self.add_setting(name, "int", getter, setter, vrange)
         # Temperature
         name = "TemperatureSetPoint"
         getter, setter, vrange = None, None, None
@@ -1492,13 +1528,13 @@ class AndorAtmcd(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
         if self._caps.ulGetFunctions & AC_GETFUNCTION_TEMPERATURERANGE:
             vrange = self._bind(GetTemperatureRange)
         if setter:
-            self.add_setting(name, "int", None, setter, vrange, setter is None)
+            self.add_setting(name, "int", None, setter, vrange)
         # Set a conservative default temperature set-point.
         self.set_setting(name, -20)
         # Fan control
         name = "Temperature"
         self.add_setting(
-            name, "int", self.get_sensor_temperature, None, (None, None), True
+            name, "int", self._get_sensor_temperature, None, (None, None)
         )
         name = "Fan mode"
         self.add_setting(
@@ -1549,7 +1585,9 @@ class AndorAtmcd(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
             vrange = range(
                 0, [5, 6][self._caps.ulCameraType & AC_CAMERATYPE_ISTAR]
             )
-            self.add_setting(name, "int", None, self._bind(SetGateMode), vrange)
+            self.add_setting(
+                name, "int", None, self._bind(SetGateMode), vrange
+            )
         # HighCapacity
         name = "HighCapacity"
         if self._caps.ulSetFunctions & AC_SETFUNCTION_HIGHCAPACITY:
@@ -1581,7 +1619,7 @@ class AndorAtmcd(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
         with self:
             return GetCameraSerialNumber()
 
-    def _on_shutdown(self):
+    def _do_shutdown(self) -> None:
         """Warm up the sensor then shut down the camera.
 
         This may take some time, so we should ensure that the _dll_lock is
@@ -1608,11 +1646,11 @@ class AndorAtmcd(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
         with self:
             ShutDown()
 
-    def _on_disable(self):
+    def _do_disable(self):
         """Call abort to stop acquisition."""
         self.abort()
 
-    def _on_enable(self):
+    def _do_enable(self):
         """Enter data acquisition state."""
         if self._acquiring:
             self.abort()
@@ -1701,13 +1739,16 @@ class AndorAtmcd(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
         with self:
             return GetDetector()
 
-    def get_sensor_temperature(self):
+    def _get_sensor_temperature(self):
         """Return the sensor temperature."""
         with self:
             return GetTemperature()[1]
 
     def get_trigger_type(self):
-        """Return the microscope.devices trigger type."""
+        """Return the microscope.devices trigger type.
+
+        deprecated, use trigger_mode and trigger_type properties.
+        """
         trig = self.get_setting("TriggerMode")
         if trig == TriggerMode.BULB:
             return microscope.abc.TRIGGER_DURATION
@@ -1717,7 +1758,33 @@ class AndorAtmcd(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
             return microscope.abc.TRIGGER_BEFORE
 
     def soft_trigger(self):
-        """Send a software trigger signal."""
+        """Send a software trigger signal.
+
+        Deprecated, use trigger().
+        """
+        with self:
+            SendSoftwareTrigger()
+
+    @property
+    def trigger_mode(self) -> microscope.TriggerMode:
+        return ATMCD_MODE_TO_TRIGGER[self.get_setting("TriggerMode")][1]
+
+    @property
+    def trigger_type(self) -> microscope.TriggerType:
+        return ATMCD_MODE_TO_TRIGGER[self.get_setting("TriggerMode")][0]
+
+    def set_trigger(
+        self, ttype: microscope.TriggerType, tmode: microscope.TriggerMode
+    ) -> None:
+        try:
+            atmcd_mode = TRIGGER_TO_ATMCD_MODE[(ttype, tmode)]
+        except KeyError:
+            raise microscope.UnsupportedFeatureError(
+                "no ATMCD mode for %s and %s" % (ttype, tmode)
+            )
+        self.set_setting("TriggerMode", atmcd_mode)
+
+    def _do_trigger(self) -> None:
         with self:
             SendSoftwareTrigger()
 
@@ -1744,7 +1811,9 @@ class AndorAtmcd(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
         top = roi.top or 1
         width = roi.width or x
         height = roi.height or y
-        if any([left < 1, top < 1, left + width - 1 > x, top + height - 1 > y]):
+        if any(
+            [left < 1, top < 1, left + width - 1 > x, top + height - 1 > y]
+        ):
             return False
         self._roi = microscope.ROI(left, top, width, height)
         return True

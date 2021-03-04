@@ -143,7 +143,11 @@ class Binning(typing.NamedTuple):
 
 
 class ROI(typing.NamedTuple):
-    """A tuple that defines a region of interest."""
+    """A tuple that defines a region of interest.
+
+    This rectangle format completely defines the ROI without reference
+    to the sensor geometry.
+    """
 
     left: int
     top: int
@@ -168,7 +172,9 @@ class TriggerType(enum.Enum):
 
     SOFTWARE = 0
     RISING_EDGE = 1
+    HIGH = 1
     FALLING_EDGE = 2
+    LOW = 2
     PULSE = 3
 
 

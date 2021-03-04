@@ -42,6 +42,7 @@ import numpy
 
 import microscope.testsuite.devices as dummies
 import microscope.testsuite.mock_devices as mocks
+from microscope import simulators
 
 
 class TestSerialMock(unittest.TestCase):
@@ -144,31 +145,6 @@ class DeviceTests:
         self.device.disable()
         self.device.disable()
 
-    def test_make_safe_on_initialized(self):
-        """Can make safe an initialized device"""
-        self.device.initialize()
-        self.device.make_safe()
-
-    def test_make_safe_on_enabled(self):
-        """Can make safe an enabled device"""
-        self.device.initialize()
-        self.device.enable()
-        self.device.make_safe()
-
-    def test_make_safe_on_disabled(self):
-        """Can make safe a disabled device"""
-        self.device.initialize()
-        self.device.enable()
-        self.device.make_safe()
-
-    def test_make_safe_on_shutdown(self):
-        """Can make safe a shutdown device"""
-        self.device.initialize()
-        self.device.enable()
-        self.device.disable()
-        self.device.shutdown()
-        self.device.make_safe()
-
 
 class SerialDeviceTests:
     def test_connection_defaults(self):
@@ -203,9 +179,6 @@ class LightSourceTests(DeviceTests):
         # We could be smarter, but rounding the values should be
         # enough to check the values when comparing power levels.
         self.assertEqual(round(first), round(second), msg)
-
-    def test_being(self):
-        self.assertTrue(self.device.is_alive())
 
     def test_get_is_on(self):
         self.assertEqual(self.device.connection.light, self.device.get_is_on())
@@ -363,21 +336,13 @@ class DSPTests(DeviceTests):
 
 class TestDummyLightSource(unittest.TestCase, LightSourceTests):
     def setUp(self):
-        self.device = dummies.TestLightSource()
+        self.device = simulators.SimulatedLightSource()
 
         # TODO: we need to rethink the test so this is not needed.
         self.fake = self.device
         self.fake.default_power = self.fake._set_point
         self.fake.min_power = 0.0
         self.fake.max_power = 100.0
-
-    def test_being(self):
-        # TODO: this test uses is_alive but that's actually a method
-        # of SerialDeviceMixin and not specific to lasers.  It is not
-        # implemented on our dummy laser.  We need to decide what to
-        # do about it.  Is this general enough that should go to all
-        # devices?
-        pass
 
     def test_get_is_on(self):
         # TODO: this test assumes the connection property to be the
@@ -389,11 +354,11 @@ class TestCoherentSapphireLaser(
     unittest.TestCase, LightSourceTests, SerialDeviceTests
 ):
     def setUp(self):
-        from microscope.lasers.sapphire import SapphireLaser
+        from microscope.lights.sapphire import SapphireLaser
         from microscope.testsuite.mock_devices import CoherentSapphireLaserMock
 
         with unittest.mock.patch(
-            "microscope.lasers.sapphire.serial.Serial",
+            "microscope.lights.sapphire.serial.Serial",
             new=CoherentSapphireLaserMock,
         ):
             self.device = SapphireLaser("/dev/null")
@@ -404,11 +369,11 @@ class TestCoherentSapphireLaser(
 
 class TestCoboltLaser(unittest.TestCase, LightSourceTests, SerialDeviceTests):
     def setUp(self):
-        from microscope.lasers.cobolt import CoboltLaser
+        from microscope.lights.cobolt import CoboltLaser
         from microscope.testsuite.mock_devices import CoboltLaserMock
 
         with unittest.mock.patch(
-            "microscope.lasers.cobolt.serial.Serial", new=CoboltLaserMock
+            "microscope.lights.cobolt.serial.Serial", new=CoboltLaserMock
         ):
             self.device = CoboltLaser("/dev/null")
         self.device.initialize()
@@ -420,11 +385,11 @@ class TestOmicronDeepstarLaser(
     unittest.TestCase, LightSourceTests, SerialDeviceTests
 ):
     def setUp(self):
-        from microscope.lasers.deepstar import DeepstarLaser
+        from microscope.lights.deepstar import DeepstarLaser
         from microscope.testsuite.mock_devices import OmicronDeepstarLaserMock
 
         with unittest.mock.patch(
-            "microscope.lasers.deepstar.serial.Serial",
+            "microscope.lights.deepstar.serial.Serial",
             new=OmicronDeepstarLaserMock,
         ):
             self.device = DeepstarLaser("/dev/null")
@@ -453,7 +418,7 @@ class TestOmicronDeepstarLaser(
 
 class TestDummyCamera(unittest.TestCase, CameraTests):
     def setUp(self):
-        self.device = dummies.TestCamera()
+        self.device = simulators.SimulatedCamera()
 
 
 class TestImageGenerator(unittest.TestCase):
@@ -463,7 +428,7 @@ class TestImageGenerator(unittest.TestCase):
         # directly the _ImageGenerator.
         width = 16
         height = 32
-        generator = dummies._ImageGenerator()
+        generator = simulators._ImageGenerator()
         patterns = list(generator.get_methods())
         for i, pattern in enumerate(patterns):
             with self.subTest(pattern):
@@ -476,9 +441,9 @@ class TestImageGenerator(unittest.TestCase):
 
 class TestDummyController(unittest.TestCase, ControllerTests):
     def setUp(self):
-        self.laser = dummies.TestLightSource()
-        self.filterwheel = dummies.TestFilterWheel(positions=6)
-        self.device = dummies.TestController(
+        self.laser = simulators.SimulatedLightSource()
+        self.filterwheel = simulators.SimulatedFilterWheel(positions=6)
+        self.device = simulators.SimulatedController(
             {"laser": self.laser, "filterwheel": self.filterwheel}
         )
 
@@ -504,23 +469,25 @@ class TestEmptyDummyFilterWheel(unittest.TestCase):
         with self.assertRaisesRegex(
             ValueError, "positions must be a positive number"
         ):
-            dummies.TestFilterWheel(positions=0)
+            simulators.SimulatedFilterWheel(positions=0)
 
 
 class TestOnePositionFilterWheel(unittest.TestCase, FilterWheelTests):
     def setUp(self):
-        self.device = dummies.TestFilterWheel(positions=1)
+        self.device = simulators.SimulatedFilterWheel(positions=1)
 
 
 class TestSixPositionFilterWheel(unittest.TestCase, FilterWheelTests):
     def setUp(self):
-        self.device = dummies.TestFilterWheel(positions=6)
+        self.device = simulators.SimulatedFilterWheel(positions=6)
 
 
 class TestDummyDeformableMirror(unittest.TestCase, DeformableMirrorTests):
     def setUp(self):
         self.planned_n_actuators = 86
-        self.device = dummies.TestDeformableMirror(self.planned_n_actuators)
+        self.device = simulators.SimulatedDeformableMirror(
+            self.planned_n_actuators
+        )
         self.fake = self.device
 
 
@@ -544,14 +511,14 @@ class TestBaseDevice(unittest.TestCase):
         name, and the class uses the default instead of an error.  See
         issue #84.
         """
-        dummies.TestLightSource()
+        simulators.SimulatedLightSource()
         # XXX: Device.__del__ calls shutdown().  However, if __init__
         # failed the device is not complete and shutdown() fails
         # because the logger has not been created.  See comments on
         # issue #69.  patch __del__ to workaround this issue.
         with unittest.mock.patch("microscope.devices.Device.__del__"):
             with self.assertRaisesRegex(TypeError, "argument 'power'"):
-                dummies.TestLightSource(power=2)
+                simulators.SimulatedLightSource(power=2)
 
 
 if __name__ == "__main__":

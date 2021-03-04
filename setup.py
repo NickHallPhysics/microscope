@@ -8,15 +8,16 @@
 ## notice and this notice are preserved.  This file is offered as-is,
 ## without any warranty.
 
+import ctypes
 import distutils.cmd
-import sys
 import unittest.mock
 
 import setuptools
 import setuptools.command.sdist
 
+
 project_name = "microscope"
-project_version = "0.5.0+dev"
+project_version = "0.6.0+dev"
 
 
 # setup.py is used for both maintainers actions (build documentation,
@@ -96,11 +97,13 @@ if has_sphinx:
     stub_c_dll = unittest.mock.MagicMock()
     stub_c_dll.configure_mock(**stub_c_attrs)
 
+    real_c_dll = ctypes.CDLL
+
     def cdll_diversion(name, *args, **kwargs):
         if name in optional_c_libs:
             return stub_c_dll
         else:
-            return cls(name, *args, **kwargs)
+            return real_c_dll(name, *args, **kwargs)
 
     class BuildDoc(sphinx.setup_command.BuildDoc):
         def run(self):
@@ -150,8 +153,9 @@ else:
 # for user information.
 manifest_files = [
     "COPYING",
-    "NEWS",
-    "README",
+    "NEWS.rst",
+    "README.rst",
+    "INSTALL.rst",
 ]
 
 
@@ -164,22 +168,31 @@ class sdist(setuptools.command.sdist.sdist):
 setuptools.setup(
     name=project_name,
     version=project_version,
-    description="An extensible microscope hardware interface.",
-    long_description=open("README", "r").read(),
+    description="An interface for control of microscope devices.",
+    long_description=open("README.rst", "r").read(),
+    long_description_content_type="text/x-rst",
     license="GPL-3.0+",
     # We need an author and an author_email value or PyPI rejects us.
-    # For multiple authors, they tell us to get a mailing list :/
+    # For email address, when there are multiple authors, they tell us
+    # to get a mailing list :/
     author="See homepage for a complete list of contributors",
     author_email=" ",
-    url="https://github.com/MicronOxford/microscope",
+    url="https://www.python-microscope.org",
+    download_url="https://pypi.org/project/microscope/",
+    project_urls={
+        "Documentation": "https://www.python-microscope.org/doc/",
+        "Source": "https://github.com/python-microscope/microscope",
+        "Release notes": "https://www.python-microscope.org/doc/news.html",
+        "Tracker": "https://github.com/python-microscope/microscope",
+    },
     packages=setuptools.find_packages(),
     python_requires=">=3.6",
-    install_requires=["Pillow", "Pyro4", "hidapi", "numpy", "pyserial",],
-    extras_require={"GUI": ["PySide2"],},
+    install_requires=["Pillow", "Pyro4", "hidapi", "numpy", "pyserial"],
+    extras_require={"GUI": ["PySide2"]},
     entry_points={
         "console_scripts": [
-            "device-server = microscope.device_server:__main__",
-            "deviceserver = microscope.device_server:__main__",
+            "device-server = microscope.device_server:_setuptools_entry_point",
+            "deviceserver = microscope.device_server:_setuptools_entry_point",
             "microscope-gui = microscope.gui:_setuptools_entry_point [GUI]",
         ]
     },
@@ -201,5 +214,5 @@ setuptools.setup(
             "source_dir": ("setup.py", "doc"),
         },
     },
-    cmdclass={"build_sphinx": BuildDoc, "sdist": sdist,},
+    cmdclass={"build_sphinx": BuildDoc, "sdist": sdist},
 )

@@ -23,8 +23,18 @@
 This module provides a server to make microscope control objects available
 over Pyro. When called from the command line, this module will serve devices
 defined in a specified config file.
+
+This module can be called as a program to serve devices over Pyro,
+like so::
+
+    python -m microscope.device_server CONFIG-FILEPATH
+
+where ``CONFIG-FILEPATH`` is the path for a python file that defines a
+``DEVICES = [device(...), ...]``
+
 """
 
+import argparse
 import importlib.machinery
 import importlib.util
 import logging
@@ -42,6 +52,7 @@ import Pyro4
 
 import microscope.abc
 from microscope.abc import FloatingDeviceMixin
+
 
 _logger = logging.getLogger(__name__)
 
@@ -95,7 +106,6 @@ def device(
 
         def construct_devices() -> typing.Dict[str, Device]:
             camera = Camera(some, arguments)
-            camera.initialize()
             # ... any other configuration that might be wanted
             return {'RedCamera': camera}
 
@@ -106,6 +116,7 @@ def device(
             device(Camera, '127.0.0.1', 8001,
                    conf={'kwarg1': some, 'kwarg2': arguments})
         ]
+
     """
     if not callable(cls):
         raise TypeError("cls must be a callable")
@@ -127,7 +138,7 @@ def _create_log_formatter(name: str):
     which includes the device server name.
 
     Args:
-        name (str): device name to be used on the log output.
+        name: device name to be used on the log output.
 
     """
     return logging.Formatter(
@@ -145,8 +156,7 @@ class Filter(logging.Filter):
         self.stop_at = self.aggregate_at + 3 * self.repeat_at
 
     def filter(self, record):
-        """Pass, aggregate or suppress consecutive repetitions of a log message.
-        """
+        """Pass, aggregate or suppress consecutive repetitions of a log message."""
         if self.last == record.msg:
             # Repeated message. Increment count.
             self.count += 1
@@ -214,6 +224,18 @@ def _register_device(pyro_daemon, device, obj_id=None) -> None:
 
 
 class DeviceServer(multiprocessing.Process):
+    """Initialise a device and serve at host/port according to its id.
+
+    Args:
+        device_def: definition of the device.
+        id_to_host: host or mapping of device identifiers to hostname.
+        id_to_port: map or mapping of device identifiers to port
+            number.
+        exit_event: a shared event to signal that the process should
+            quit.
+
+    """
+
     def __init__(
         self,
         device_def,
@@ -221,14 +243,6 @@ class DeviceServer(multiprocessing.Process):
         id_to_port: typing.Mapping[str, int],
         exit_event: typing.Optional[multiprocessing.Event] = None,
     ):
-        """Initialise a device and serve at host/port according to its id.
-
-        :param device_def: definition of the device
-        :param id_to_host: host or mapping of device identifiers to hostname
-        :param id_to_port: map or mapping of device identifiers to port number
-        :param exit_event: a shared event to signal that the process
-            should quit.
-        """
         # The device to serve.
         self._device_def = device_def
         self._devices: typing.Dict[str, microscope.abc.Device] = {}
@@ -244,6 +258,7 @@ class DeviceServer(multiprocessing.Process):
         """Create new instance with same settings.
 
         This is useful to restart a device server.
+
         """
         return DeviceServer(
             self._device_def,
@@ -268,11 +283,6 @@ class DeviceServer(multiprocessing.Process):
         for handler in list(root_logger.handlers):
             root_logger.removeHandler(handler)
 
-        if __debug__:
-            root_logger.setLevel(logging.DEBUG)
-        else:
-            root_logger.setLevel(logging.INFO)
-
         # Later, we'll log to one file per server, with a filename
         # based on a unique identifier for the device. Some devices
         # don't have UIDs available until after initialization, so
@@ -291,12 +301,9 @@ class DeviceServer(multiprocessing.Process):
         if not cls_is_type:
             self._devices = cls(**self._device_def["conf"])
         else:
-            # This is just the device class, we need to initialize the
-            # device after constructing it.
-            device = cls(**self._device_def["conf"])
             while not self.exit_event.is_set():
                 try:
-                    device.initialize()
+                    device = cls(**self._device_def["conf"])
                 except Exception as e:
                     _logger.info(
                         "Failed to start device. Retrying in 5s.", exc_info=e
@@ -309,7 +316,9 @@ class DeviceServer(multiprocessing.Process):
         if cls_is_type and issubclass(cls, FloatingDeviceMixin):
             uid = str(list(self._devices.values())[0].get_id())
             if uid not in self._id_to_host or uid not in self._id_to_port:
-                raise Exception("Host or port not found for device %s" % (uid,))
+                raise Exception(
+                    "Host or port not found for device %s" % (uid,)
+                )
             host = self._id_to_host[uid]
             port = self._id_to_port[uid]
         else:
@@ -366,8 +375,6 @@ def serve_devices(devices, exit_event=None):
     log_handler = RotatingFileHandler("__MAIN__.log")
     log_handler.setFormatter(_create_log_formatter("device-server"))
     root_logger.addHandler(log_handler)
-
-    root_logger.setLevel(logging.DEBUG)
 
     # An event to trigger clean termination of subprocesses. This is the
     # only way to ensure devices are shut down properly when processes
@@ -510,37 +517,24 @@ def serve_devices(devices, exit_event=None):
     return
 
 
-def __main__():
-    """Serve devices via Pyro.
-
-    To run in the terminal, use::
-
-        deviceserver CONFIG
-
-    To configure and run as a Windows service use::
-
-        deviceserver [install,remove,update,start,stop,restart,status] CONFIG
-
-    ``CONFIG`` is a ``.py`` file that exports ``DEVICES = [device(...), ...]``
-    """
-
-    if len(sys.argv) == 1:
-        print("\nToo few arguments.\n", file=sys.stderr)
-        print(__main__.__doc__, file=sys.stderr)
-        sys.exit(1)
-
-    if sys.argv[1].lower() in [
-        "install",
-        "update",
-        "start",
-        "stop",
-        "restart",
-        "remove",
-        "status",
-    ]:
-        __winservice__()
-    else:
-        __console__()
+def _parse_cmd_line_args(args: typing.Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="device-server")
+    parser.add_argument(
+        "--logging-level",
+        action="store",
+        type=str,
+        default="info",
+        choices=["debug", "info", "warning", "error", "critical"],
+        help="Set logging level",
+    )
+    parser.add_argument(
+        "config_fpath",
+        action="store",
+        type=str,
+        metavar="CONFIG-FILEPATH",
+        help="Path to the configuration file",
+    )
+    return parser.parse_args(args)
 
 
 def _load_source(filepath):
@@ -561,13 +555,11 @@ def validate_devices(configfile):
     return devices
 
 
-def __console__():
-    """Serve devices from a console process."""
+def main(argv: typing.Sequence[str]) -> int:
+    args = _parse_cmd_line_args(argv[1:])
+
     root_logger = logging.getLogger()
-    if __debug__:
-        root_logger.setLevel(logging.DEBUG)
-    else:
-        root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(args.logging_level.upper())
 
     stderr_handler = StreamHandler(sys.stderr)
     stderr_handler.setFormatter(_create_log_formatter("device-server"))
@@ -575,28 +567,30 @@ def __console__():
 
     root_logger.addFilter(Filter())
 
-    if len(sys.argv) < 2:
-        _logger.critical("No config file specified. Exiting.")
-        devices = []
-    else:
-        try:
-            devices = validate_devices(sys.argv[1])
-        except Exception as e:
-            _logger.critical(e)
-            devices = []
-
-    if not devices:
-        sys.exit(1)
+    devices = validate_devices(args.config_fpath)
 
     serve_devices(devices)
 
+    return 0
 
-def __winservice__():
-    """Configure and control a Windows service to serve devices."""
-    from microscope.win32 import handle_command_line
 
-    handle_command_line()
+def _setuptools_entry_point() -> int:
+    # The setuptools entry point must be a function, we can't simply
+    # name this module even if this module does work as a script.  We
+    # also do not want to set the default of main() to sys.argv
+    # because when the documentation is generated (with Sphinx's
+    # autodoc extension), then sys.argv gets replaced with the
+    # sys.argv value at the time docs were generated (see
+    # https://stackoverflow.com/a/12087750 )
+    return main(sys.argv)
+
+
+def __main__() -> None:
+    # Kept for backwards compatibility.  It keeps the setuptools
+    # scripts from older editable mode installations.  Will be safe to
+    # remove soon.
+    _setuptools_entry_point()
 
 
 if __name__ == "__main__":
-    __main__()
+    sys.exit(main(sys.argv))

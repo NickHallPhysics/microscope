@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+## Copyright (C) 2009 David Baddeley <d.baddeley@auckland.ac.nz>
 ## Copyright (C) 2020 Mick Phillips <mick.phillips@gmail.com>
 ##
 ## This file is part of Microscope.
@@ -16,6 +17,9 @@
 ##
 ## You should have received a copy of the GNU General Public License
 ## along with Microscope.  If not, see <http://www.gnu.org/licenses/>.
+
+## The implementation of dllFunc is based on the implementation in
+## PYME, hence copyright to David Baddeley.
 
 """pvcam library wrapper.
 
@@ -141,6 +145,7 @@ import Pyro4
 
 import microscope
 import microscope.abc
+
 
 _logger = logging.getLogger(__name__)
 
@@ -896,7 +901,9 @@ dllFunc(
     [ctypes.POINTER(smart_stream_type),],
     ["pSmtStruct",],
 )
-dllFunc("pl_create_frame_info_struct", [OUTPUT(FRAME_INFO),], ["pNewFrameInfo"])
+dllFunc(
+    "pl_create_frame_info_struct", [OUTPUT(FRAME_INFO),], ["pNewFrameInfo"]
+)
 dllFunc(
     "pl_release_frame_info_struct",
     [ctypes.POINTER(FRAME_INFO),],
@@ -995,7 +1002,9 @@ dllFunc(
 dllFunc("pl_exp_unlock_oldest_frame", [int16], ["hcam"])
 dllFunc("pl_exp_stop_cont", [int16, int16], ["hcam", "cam_state"])
 dllFunc("pl_exp_abort", [int16, int16], ["hcam", "cam_state"])
-dllFunc("pl_exp_finish_seq", [int16, ctypes.c_void_p], ["hcam", "pixel_stream"])
+dllFunc(
+    "pl_exp_finish_seq", [int16, ctypes.c_void_p], ["hcam", "pixel_stream"]
+)
 
 
 # Map ATTR_ enums to the return type for that ATTR.
@@ -1107,8 +1116,7 @@ STATUS_STRINGS = {
 class TriggerMode:
     """A microscope trigger mode using PVCAM PMODES."""
 
-    def __init__(self, id, label, pv_mode, microscope_mode):
-        self.id = id
+    def __init__(self, label, pv_mode, microscope_mode):
         self.label = label
         self.pv_mode = pv_mode
         self.microscope_mode = microscope_mode
@@ -1130,25 +1138,37 @@ class TriggerMode:
 # Trigger mode definitions.
 TRIGGER_MODES = {
     TRIG_SOFT: TriggerMode(
-        TRIG_SOFT, "software", TIMED_MODE, microscope.abc.TRIGGER_SOFT
+        "software", TIMED_MODE, microscope.abc.TRIGGER_SOFT
     ),
-    TRIG_TIMED: TriggerMode(TRIG_TIMED, "timed", TIMED_MODE, -1),
-    TRIG_VARIABLE: TriggerMode(
-        TRIG_VARIABLE, "variable timed", VARIABLE_TIMED_MODE, -1
-    ),
+    TRIG_TIMED: TriggerMode("timed", TIMED_MODE, -1),
+    TRIG_VARIABLE: TriggerMode("variable timed", VARIABLE_TIMED_MODE, -1),
     TRIG_FIRST: TriggerMode(
-        TRIG_FIRST,
-        "trig. first",
-        TRIGGER_FIRST_MODE,
-        microscope.abc.TRIGGER_BEFORE,
+        "trig. first", TRIGGER_FIRST_MODE, microscope.abc.TRIGGER_BEFORE,
     ),
     TRIG_STROBED: TriggerMode(
-        TRIG_STROBED, "strobed", STROBED_MODE, microscope.abc.TRIGGER_BEFORE
+        "strobed", STROBED_MODE, microscope.abc.TRIGGER_BEFORE
     ),
-    TRIG_BULB: TriggerMode(
-        TRIG_BULB, "bulb", BULB_MODE, microscope.abc.TRIGGER_DURATION
+    TRIG_BULB: TriggerMode("bulb", BULB_MODE, microscope.abc.TRIGGER_DURATION),
+}
+
+PV_MODE_TO_TRIGGER = {
+    TRIG_SOFT: (microscope.TriggerType.SOFTWARE, microscope.TriggerMode.ONCE),
+    TRIG_FIRST: (
+        microscope.TriggerType.RISING_EDGE,
+        microscope.TriggerMode.ONCE,
+    ),
+    TRIG_STROBED: (
+        microscope.TriggerType.RISING_EDGE,
+        microscope.TriggerMode.STROBE,
+    ),
+    TRIG_BULB: (
+        microscope.TriggerType.RISING_EDGE,
+        microscope.TriggerMode.BULB,
     ),
 }
+
+
+TRIGGER_TO_PV_MODE = {v: k for k, v in PV_MODE_TO_TRIGGER.items()}
 
 
 class PVParam:
@@ -1267,7 +1287,9 @@ class PVParam:
     @property
     def count(self):
         """Return count of parameter enum entries."""
-        return int(_get_param(self.cam.handle, self.param_id, ATTR_COUNT).value)
+        return int(
+            _get_param(self.cam.handle, self.param_id, ATTR_COUNT).value
+        )
 
     @property
     def values(self):
@@ -1350,7 +1372,9 @@ class PVStringParam(PVParam):
         return values
 
 
-class PVCamera(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
+class PVCamera(
+    microscope.abc.FloatingDeviceMixin, microscope.abc.Camera,
+):
     """Implements the CameraDevice interface for the pvcam library."""
 
     # Keep track of open cameras.
@@ -1402,6 +1426,8 @@ class PVCamera(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
             (2, 100),
         )
 
+        self.initialize()
+
     @property
     def _region(self):
         """Return a rgn_type for current roi and binning settings."""
@@ -1421,7 +1447,7 @@ class PVCamera(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
         # Not used: images fetched using callback.
         return None
 
-    def _on_enable(self):
+    def _do_enable(self):
         """Enable the camera hardware and make ready to respond to triggers.
 
         Return True if successful, False if not."""
@@ -1523,7 +1549,8 @@ class PVCamera(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
             self.exposure_time = t_readback * multipliers[t_resolution]
         # Update cycle time. Exposure time in seconds; readout time in microseconds.
         self.cycle_time = (
-            self.exposure_time + 1e-6 * self._params[PARAM_READOUT_TIME].current
+            self.exposure_time
+            + 1e-6 * self._params[PARAM_READOUT_TIME].current
         )
         # Set up exposure time for VARIABLE_TIMED_MODE, as according to documentation.
         # It doesn't seem to work.
@@ -1541,12 +1568,12 @@ class PVCamera(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
         self._acquiring = True
         return self._acquiring
 
-    def _on_disable(self):
+    def _do_disable(self):
         """Disable the hardware for a short period of inactivity."""
         self.abort()
         _cam_deregister_callback(self.handle, PL_CALLBACK_EOF)
 
-    def _on_shutdown(self):
+    def _do_shutdown(self) -> None:
         """Disable the hardware for a prolonged period of inactivity."""
         self.abort()
         _cam_close(self.handle)
@@ -1676,9 +1703,10 @@ class PVCamera(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
                 p.name,
                 p.dtype,
                 lambda p=p: p.current,
-                p.set_value,
+                p.set_value
+                if p.access in [ACC_READ_WRITE, ACC_WRITE_ONLY]
+                else None,
                 lambda p=p: p.values,
-                not p.access in [ACC_READ_WRITE, ACC_WRITE_ONLY],
             )
         if PARAM_GAIN_MULT_FACTOR in self._params:
             self.add_setting(
@@ -1754,14 +1782,6 @@ class PVCamera(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
         if new_readout_transform:
             self._set_readout_transform(new_readout_transform)
 
-    def make_safe(self):
-        """Put the camera into a safe state.
-
-        Safe means (at least):
-         * it won't sustain damage if light falls on the sensor."""
-        if self._acquiring:
-            self.abort()
-
     @microscope.abc.keep_acquiring
     def set_exposure_time(self, value):
         """Set the exposure time to value."""
@@ -1771,23 +1791,28 @@ class PVCamera(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
         """Return the current exposure time.
 
         Just return self.exposure_time, which is updated with the real
-        value during _on_enable."""
+        value during _do_enable."""
         return self.exposure_time
 
     def get_cycle_time(self):
         """Return the cycle time.
 
         Just return self.cycle_time, which is updated with the real
-        value during _on_enable."""
+        value during _do_enable."""
         return self.cycle_time
 
     def get_trigger_type(self):
-        """Return the current trigger type."""
+        """Return the current trigger type.
+
+        Deprecated, get the trigger_mode and trigger_type property.
+        """
         return TRIGGER_MODES[self._trigger].microscope_mode
 
     @Pyro4.oneway
     def soft_trigger(self):
         """Expose software triggering to a client.
+
+        Deprecated, use trigger().
 
         Trigger an exposure in TRIG_SOFT mode.
         Log some debugging stats in other trigger modes."""
@@ -1811,3 +1836,26 @@ class PVCamera(microscope.abc.FloatingDeviceMixin, microscope.abc.Camera):
                 bytes.value,
             )
         return
+
+    @property
+    def trigger_mode(self) -> microscope.TriggerMode:
+        return PV_MODE_TO_TRIGGER[self._trigger][1]
+
+    @property
+    def trigger_type(self) -> microscope.TriggerType:
+        return PV_MODE_TO_TRIGGER[self._trigger][0]
+
+    def set_trigger(
+        self, ttype: microscope.TriggerType, tmode: microscope.TriggerMode
+    ) -> None:
+        try:
+            self._trigger = TRIGGER_TO_PV_MODE[(ttype, tmode)]
+        except KeyError:
+            raise microscope.UnsupportedFeatureError(
+                "no PVCam mode for %s and %s" % (ttype, tmode)
+            )
+
+    def _do_trigger(self) -> None:
+        _exp_start_seq(
+            self.handle, self._buffer.ctypes.data_as(ctypes.c_void_p)
+        )
